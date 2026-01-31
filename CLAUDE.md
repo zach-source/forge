@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Forge is an autonomous Claude execution orchestrator written in Go. It manages Claude sessions in tmux, coordinates development workflows through specialized "leader" agents, and integrates with Notion for project management.
+Forge is an autonomous Claude execution orchestrator written in Go. It manages Claude sessions in tmux, coordinates development workflows through specialized "leader" agents, supports parallel workers with persistent identities, and integrates with external project management systems (Notion, GitHub Projects).
 
 ## Architecture
 
@@ -21,7 +21,9 @@ cmd/forge/           # CLI commands
 ├── init.go          # forge init - workspace initialization
 ├── repo.go          # forge repo - repository management
 ├── work.go          # forge work - worktree management
-├── board.go         # forge board - Notion sync
+├── board.go         # forge board - Notion/GitHub sync
+├── kanban.go        # forge kanban - local issue tracker
+├── worker.go        # forge worker - parallel workers
 ├── planner.go       # forge planner - planning leader
 ├── reviewer.go      # forge reviewer - review leader
 ├── merge.go         # forge merge - merge leader
@@ -31,10 +33,20 @@ internal/
 ├── agent/           # Core agent loop
 │   ├── agent.go     # Agent orchestration
 │   └── config.go    # Agent configuration
-├── board/           # Board sync prompts
-│   └── prompt.go    # Notion sync prompt templates
+├── board/           # Board provider interface
+│   ├── provider.go  # Provider interface definition
+│   ├── notion_provider.go
+│   ├── github_provider.go
+│   ├── prompt.go    # Notion sync prompts
+│   └── github.go    # GitHub sync prompts
 ├── detector/        # Completion detection
 │   └── detector.go  # Promise matching
+├── github/          # GitHub Projects config
+│   └── config.go    # Project URL parsing, storage
+├── kanban/          # Local issue tracker
+│   ├── issue.go     # Issue types
+│   ├── store.go     # SQLite storage
+│   └── display.go   # TUI rendering
 ├── leader/          # Leader infrastructure
 │   ├── leader.go    # Shared leader config
 │   ├── planner.go   # Planner prompt
@@ -57,6 +69,13 @@ internal/
 │   └── discover.go  # Session discovery
 ├── tmux/            # Tmux integration
 │   └── session.go   # Tmux session management
+├── worker/          # Parallel worker system
+│   ├── worker.go    # Worker types
+│   ├── registry.go  # Worker registry
+│   ├── lifecycle.go # Start/stop/pause/resume
+│   ├── prompt.go    # Identity injection
+│   ├── lock.go      # Resource locking
+│   └── names.go     # NATO alphabet naming
 ├── workspace/       # Workspace management
 │   ├── workspace.go # Core workspace types
 │   ├── repo.go      # Repository operations
@@ -65,6 +84,51 @@ internal/
 │   └── detect.go    # Conflict detection
 └── theme/           # UI theming
     └── theme.go     # Color schemes
+```
+
+## Key Features
+
+### Worker System
+
+Parallel workers with NATO alphabet names (alpha, bravo, charlie...):
+
+```bash
+forge worker create                  # Create worker
+forge worker list                    # List workers
+forge worker start alpha --task X   # Start worker on task
+forge worker stop alpha             # Stop worker
+forge worker attach alpha           # Attach to session
+```
+
+Workers maintain persistent identity via registry at `~/.forge/workers/registry.yaml`.
+
+### Board Providers
+
+Extensible provider interface for external project management:
+
+```go
+type Provider interface {
+    Name() string
+    MCPServers() []string
+    SyncPrompt(oneShot bool) string
+    Configure() error
+    // ...
+}
+```
+
+Current providers:
+- **Notion** (default): `forge board`
+- **GitHub Projects**: `forge board --github`
+
+### Local Kanban
+
+SQLite-based issue tracker:
+
+```bash
+forge kanban                    # Board view
+forge kanban add "Title" -p high
+forge kanban move abc123 done
+forge kanban list
 ```
 
 ## Key Patterns
@@ -101,6 +165,16 @@ prompt := leader.PlannerPrompt(databaseID, workDir)
 return leader.Run(ctx, cfg, prompt, leader.PlannerPromise())
 ```
 
+### Provider Pattern
+
+Board providers implement the Provider interface:
+
+```go
+provider := board.GetProvider(board.ProviderGitHub)
+provider.Configure()
+prompt := provider.SyncPrompt(true)
+```
+
 ### Workspace Detection
 
 Commands that need workspace context use:
@@ -114,11 +188,13 @@ ws, err := workspace.Find(cwd)  // Walks up to find .forge/
 MCP servers are defined in `internal/mcp/servers.go`:
 
 ```go
-"notion": {
+"github": {
     Type:    "stdio",
     Command: "npx",
-    Args:    []string{"-y", "@notionhq/notion-mcp-server"},
-    Env:     map[string]string{...},
+    Args:    []string{"-y", "@anthropic/github-mcp-server"},
+    Env:     map[string]string{
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
+    },
 },
 ```
 
@@ -138,7 +214,8 @@ Run specific package tests:
 
 ```bash
 go test -v ./internal/agent/...
-go test -v ./internal/detector/...
+go test -v ./internal/kanban/...
+go test -v ./internal/worker/...
 ```
 
 ## Adding New Features
@@ -154,6 +231,12 @@ go test -v ./internal/detector/...
 1. Add prompt in `internal/leader/xxx.go`
 2. Add command in `cmd/forge/xxx.go`
 3. Register in main.go
+
+### New Board Provider
+
+1. Create `internal/board/xxx_provider.go` implementing `Provider`
+2. Add constant in `provider.go`
+3. Add case in `GetProvider()`
 
 ### New MCP Server
 
@@ -173,13 +256,16 @@ go test -v ./internal/detector/...
 - `github.com/spf13/cobra` - CLI framework
 - `github.com/charmbracelet/bubbletea` - TUI framework
 - `github.com/charmbracelet/lipgloss` - TUI styling
+- `modernc.org/sqlite` - Pure Go SQLite
 - `gopkg.in/yaml.v3` - YAML parsing
 
 ## State Files
 
 - `~/.forge/sessions/*.state.md` - Global session state
+- `~/.forge/workers/registry.yaml` - Worker registry
 - `.forge/workspace.yaml` - Workspace config
 - `.forge/worktrees/worktrees.yaml` - Worktree tracking
+- `.forge/kanban.db` - Local issue database
 
 ## Common Tasks
 
@@ -204,3 +290,7 @@ Edit the appropriate file in `internal/leader/`:
 ### Add worktree functionality
 
 Edit `internal/workspace/worktree.go` for worktree operations.
+
+### Modify worker identity prompts
+
+Edit `internal/worker/prompt.go` for Graphiti memory integration.

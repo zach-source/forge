@@ -1,0 +1,19 @@
+{
+  "name": "forge",
+  "version": "1.0.0",
+  "description": "Autonomous Claude execution orchestrator with parallel workers, kanban tracking, and board sync",
+  "author": "zach-source",
+  "repository": "https://github.com/zach-source/forge",
+  "keywords": ["automation", "orchestration", "workers", "kanban", "tmux"],
+  "skills": [
+    "skills/forge-kanban.md",
+    "skills/forge-worker.md",
+    "skills/forge-board.md",
+    "skills/forge-session.md"
+  ],
+  "commands": [
+    "commands/kanban.md",
+    "commands/worker.md",
+    "commands/board-sync.md"
+  ]
+}
