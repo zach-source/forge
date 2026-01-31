@@ -1,0 +1,27 @@
+# Binaries
+bin/
+/forge
+*.exe
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude local settings
+.claude/settings.local.json
+.claude/*.local.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Temporary files
+*.tmp
+*.log
