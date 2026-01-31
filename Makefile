@@ -1,17 +1,30 @@
-.PHONY: build test clean install fmt lint
+.PHONY: build build-all test clean install fmt lint
 
-BINARY_NAME=forge
 VERSION?=0.1.0
 BUILD_DIR=./bin
 
 # Build flags
 LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION)"
 
-build:
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/forge
+build: build-forge build-foundry
+
+build-forge:
+	go build $(LDFLAGS) -o $(BUILD_DIR)/forge ./cmd/forge
+
+build-foundry:
+	go build $(LDFLAGS) -o $(BUILD_DIR)/foundry ./cmd/foundry
+
+build-all: build
 
 install: build
-	cp $(BUILD_DIR)/$(BINARY_NAME) ~/bin/$(BINARY_NAME)
+	cp $(BUILD_DIR)/forge ~/bin/forge
+	cp $(BUILD_DIR)/foundry ~/bin/foundry
+
+install-forge: build-forge
+	cp $(BUILD_DIR)/forge ~/bin/forge
+
+install-foundry: build-foundry
+	cp $(BUILD_DIR)/foundry ~/bin/foundry
 
 test:
 	go test -v ./...
@@ -32,8 +45,11 @@ lint:
 	golangci-lint run
 
 # Development helpers
-run:
+run-forge:
 	go run ./cmd/forge $(ARGS)
+
+run-foundry:
+	go run ./cmd/foundry $(ARGS)
 
 deps:
 	go mod tidy
