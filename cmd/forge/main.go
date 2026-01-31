@@ -37,6 +37,7 @@ and iterates until the completion promise is met or max iterations reached.`,
 		newRepoCmd(),
 		newWorkCmd(),
 		newBoardCmd(),
+		newKanbanCmd(),
 		// Worker commands
 		newWorkerCmd(),
 		// Leader commands

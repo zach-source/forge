@@ -3,6 +3,9 @@ bin/
 /forge
 *.exe
 
+# Forge workspace data
+.forge/
+
 # IDE and editor files
 .idea/
 .vscode/
