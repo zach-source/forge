@@ -11,22 +11,45 @@ import (
 	"golang.org/x/term"
 )
 
+func getFoundryDir() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting working directory: %w", err)
+	}
+
+	foundryDir := filepath.Join(cwd, ".foundry")
+	if err := os.MkdirAll(foundryDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating .foundry directory: %w", err)
+	}
+
+	return foundryDir, nil
+}
+
+func getKanbanStore() (*kanban.Store, error) {
+	foundryDir, err := getFoundryDir()
+	if err != nil {
+		return nil, err
+	}
+
+	dbPath := filepath.Join(foundryDir, "kanban.db")
+	return kanban.NewStore(dbPath)
+}
+
 func newKanbanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "kanban",
-		Aliases: []string{"kb", "issues"},
-		Short:   "Manage local kanban issue tracker",
+		Aliases: []string{"kb", "issues", "i"},
+		Short:   "Local kanban issue tracker",
 		Long: `Local kanban-style issue tracker with SQLite storage.
 
-Issues are stored in .forge/kanban.db in the current directory.
-Use this for quick task tracking without external dependencies.
+Issues are stored in .foundry/kanban.db in the current directory.
 
 Examples:
-  forge kanban                     # Show board view
-  forge kanban list                # List all issues
-  forge kanban add "Fix bug"       # Add new issue
-  forge kanban move <id> todo      # Move issue to column
-  forge kanban show <id>           # Show issue details`,
+  foundry kanban                     # Show board view
+  foundry kanban list                # List all issues
+  foundry kanban add "Fix bug"       # Add new issue
+  foundry kanban move <id> todo      # Move issue to column
+  foundry kanban show <id>           # Show issue details`,
 	}
 
 	cmd.AddCommand(
@@ -45,22 +68,6 @@ Examples:
 	}
 
 	return cmd
-}
-
-func getKanbanStore() (*kanban.Store, error) {
-	// Look for .forge directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("getting working directory: %w", err)
-	}
-
-	forgeDir := filepath.Join(cwd, ".forge")
-	if err := os.MkdirAll(forgeDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating .forge directory: %w", err)
-	}
-
-	dbPath := filepath.Join(forgeDir, "kanban.db")
-	return kanban.NewStore(dbPath)
 }
 
 func newKanbanBoardCmd() *cobra.Command {
@@ -97,8 +104,9 @@ func newKanbanListCmd() *cobra.Command {
 	var status string
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List issues",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List issues",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := getKanbanStore()
 			if err != nil {
@@ -136,9 +144,10 @@ func newKanbanAddCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "add <title>",
-		Short: "Add a new issue",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "add <title>",
+		Aliases: []string{"new", "create"},
+		Short:   "Add a new issue",
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := getKanbanStore()
 			if err != nil {
@@ -166,9 +175,8 @@ func newKanbanAddCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Created issue: %s\n", issue.ID)
-			fmt.Printf("  Title: %s\n", issue.Title)
-			fmt.Printf("  Status: %s\n", issue.Status)
+			fmt.Printf("Created: %s\n", issue.ID)
+			fmt.Printf("  %s [%s] %s\n", issue.ID, issue.Priority, issue.Title)
 			return nil
 		},
 	}
@@ -242,7 +250,14 @@ func newKanbanMoveCmd() *cobra.Command {
 		Short: "Move issue to a different status",
 		Long: `Move an issue to a different kanban column.
 
-Valid statuses: backlog, todo, in_progress, review, done`,
+Valid statuses: backlog, todo, in_progress, review, done
+
+Shortcuts:
+  b = backlog
+  t = todo
+  p = in_progress (progress)
+  r = review
+  d = done`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := getKanbanStore()
@@ -252,7 +267,10 @@ Valid statuses: backlog, todo, in_progress, review, done`,
 			defer store.Close()
 
 			id := args[0]
-			status := kanban.Status(args[1])
+			statusArg := args[1]
+
+			// Handle shortcuts
+			status := expandStatus(statusArg)
 
 			// Validate status
 			valid := false
@@ -263,16 +281,33 @@ Valid statuses: backlog, todo, in_progress, review, done`,
 				}
 			}
 			if !valid {
-				return fmt.Errorf("invalid status: %s (valid: backlog, todo, in_progress, review, done)", args[1])
+				return fmt.Errorf("invalid status: %s (valid: backlog, todo, in_progress, review, done)", statusArg)
 			}
 
 			if err := store.Move(id, status); err != nil {
 				return err
 			}
 
-			fmt.Printf("Moved %s to %s\n", id, status)
+			fmt.Printf("Moved %s → %s\n", id, status)
 			return nil
 		},
+	}
+}
+
+func expandStatus(s string) kanban.Status {
+	switch strings.ToLower(s) {
+	case "b", "backlog":
+		return kanban.StatusBacklog
+	case "t", "todo":
+		return kanban.StatusTodo
+	case "p", "progress", "in_progress", "wip":
+		return kanban.StatusInProgress
+	case "r", "review":
+		return kanban.StatusReview
+	case "d", "done", "complete":
+		return kanban.StatusDone
+	default:
+		return kanban.Status(s)
 	}
 }
 
@@ -328,7 +363,7 @@ func newKanbanEditCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Updated issue: %s\n", issue.ID)
+			fmt.Printf("Updated: %s\n", issue.ID)
 			return nil
 		},
 	}
@@ -346,9 +381,10 @@ func newKanbanDeleteCmd() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "delete <id>",
-		Short: "Delete an issue",
-		Args:  cobra.ExactArgs(1),
+		Use:     "delete <id>",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete an issue",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := getKanbanStore()
 			if err != nil {
@@ -364,7 +400,7 @@ func newKanbanDeleteCmd() *cobra.Command {
 				if issue == nil {
 					return fmt.Errorf("issue not found: %s", args[0])
 				}
-				fmt.Printf("Delete issue \"%s\"? Use --force to confirm\n", issue.Title)
+				fmt.Printf("Delete \"%s\"? Use --force to confirm\n", issue.Title)
 				return nil
 			}
 
@@ -372,11 +408,11 @@ func newKanbanDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Deleted issue: %s\n", args[0])
+			fmt.Printf("Deleted: %s\n", args[0])
 			return nil
 		},
 	}
 
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force deletion without confirmation")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force deletion")
 	return cmd
 }

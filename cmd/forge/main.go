@@ -13,38 +13,31 @@ var Version = "dev"
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "forge",
-		Short: "Autonomous Claude execution agent",
-		Long: `Forge orchestrates autonomous Claude sessions for the Ralph Loop.
+		Short: "Claude session runner",
+		Long: `Forge runs Claude sessions in tmux for autonomous execution.
 
-It spawns Claude in a tmux session for attachable, persistent execution,
-runs with --dangerously-skip-permissions for autonomous operation,
-and iterates until the completion promise is met or max iterations reached.`,
+It provides a minimal interface for starting, monitoring, and controlling
+Claude sessions. For orchestration features (workers, leaders, boards),
+use the foundry CLI.
+
+Commands:
+  forge start <prompt>   Start a Claude session
+  forge attach [id]      Attach to a session's tmux
+  forge status [id]      Show session status
+  forge cancel [id]      Cancel a session
+  forge list             List all sessions
+  forge log [id]         View session output`,
 		Version: Version,
 	}
 
-	// Add subcommands
+	// Session commands only
 	rootCmd.AddCommand(
-		// Core commands
 		newStartCmd(),
 		newAttachCmd(),
 		newStatusCmd(),
 		newCancelCmd(),
 		newListCmd(),
 		newLogCmd(),
-		newMonitorCmd(),
-		// Workspace commands
-		newInitCmd(),
-		newRepoCmd(),
-		newWorkCmd(),
-		newBoardCmd(),
-		newKanbanCmd(),
-		// Worker commands
-		newWorkerCmd(),
-		// Leader commands
-		newPlannerCmd(),
-		newReviewerCmd(),
-		newMergeCmd(),
-		newDeployCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

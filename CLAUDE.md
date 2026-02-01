@@ -1,173 +1,149 @@
-# Forge Development Guide
+# Forge & Foundry Development Guide
 
-> Instructions for Claude when working on the forge codebase
+> Instructions for Claude when working on the forge/foundry codebase
 
 ## Project Overview
 
-Forge is an autonomous Claude execution orchestrator written in Go. It manages Claude sessions in tmux, coordinates development workflows through specialized "leader" agents, supports parallel workers with persistent identities, and integrates with external project management systems (Notion, GitHub Projects).
+This repository contains two CLI tools:
+
+**Forge** - Minimal Claude session runner
+- Starts Claude in tmux for autonomous execution
+- Detects completion promises
+- Session lifecycle management (start, attach, status, cancel, list, log)
+
+**Foundry** - Development orchestration platform
+- Builds on top of forge for higher-level workflows
+- Parallel workers with persistent identity
+- External board sync (Notion, GitHub Projects)
+- Local kanban issue tracking
+- Workspace and worktree management
+- Leader agents (planner, reviewer, merge, deploy)
 
 ## Architecture
 
 ```
-cmd/forge/           # CLI commands
-├── main.go          # Entry point, command registration
-├── start.go         # forge start - autonomous task execution
-├── attach.go        # forge attach - attach to session
-├── status.go        # forge status - session status
-├── cancel.go        # forge cancel - cancel session
-├── list.go          # forge list - list sessions
-├── log.go           # forge log - view logs
-├── monitor.go       # forge monitor - TUI dashboard
-├── init.go          # forge init - workspace initialization
-├── repo.go          # forge repo - repository management
-├── work.go          # forge work - worktree management
-├── board.go         # forge board - Notion/GitHub sync
-├── kanban.go        # forge kanban - local issue tracker
-├── worker.go        # forge worker - parallel workers
-├── planner.go       # forge planner - planning leader
-├── reviewer.go      # forge reviewer - review leader
-├── merge.go         # forge merge - merge leader
-└── deploy.go        # forge deploy - deployment leader
+cmd/
+├── forge/               # Minimal Claude session runner
+│   ├── main.go          # Entry point
+│   ├── start.go         # Start Claude session
+│   ├── attach.go        # Attach to tmux
+│   ├── status.go        # Session status
+│   ├── cancel.go        # Cancel session
+│   ├── list.go          # List sessions
+│   └── log.go           # View output
+│
+└── foundry/             # Orchestration platform
+    ├── main.go          # Entry point
+    ├── kanban.go        # Local issue tracker
+    ├── worker.go        # Parallel workers
+    ├── board.go         # Notion/GitHub sync
+    ├── monitor.go       # TUI dashboard
+    ├── planner.go       # Planning leader
+    ├── reviewer.go      # Review leader
+    ├── merge.go         # Merge leader
+    ├── deploy.go        # Deploy leader
+    ├── init.go          # Workspace setup
+    ├── repo.go          # Repository management
+    └── work.go          # Worktree management
 
 internal/
-├── agent/           # Core agent loop
-│   ├── agent.go     # Agent orchestration
-│   └── config.go    # Agent configuration
-├── board/           # Board provider interface
-│   ├── provider.go  # Provider interface definition
-│   ├── notion_provider.go
-│   ├── github_provider.go
-│   ├── prompt.go    # Notion sync prompts
-│   └── github.go    # GitHub sync prompts
-├── detector/        # Completion detection
-│   └── detector.go  # Promise matching
-├── github/          # GitHub Projects config
-│   └── config.go    # Project URL parsing, storage
-├── kanban/          # Local issue tracker
-│   ├── issue.go     # Issue types
-│   ├── store.go     # SQLite storage
-│   └── display.go   # TUI rendering
-├── leader/          # Leader infrastructure
-│   ├── leader.go    # Shared leader config
-│   ├── planner.go   # Planner prompt
-│   ├── reviewer.go  # Reviewer prompt
-│   ├── merge.go     # Merge leader prompt
-│   └── deploy.go    # Deploy leader prompt
-├── mcp/             # MCP server configuration
-│   ├── servers.go   # Server definitions
-│   └── config.go    # Config generation
-├── monitor/         # TUI components
-│   ├── model.go     # Bubble Tea model
-│   └── view.go      # View rendering
-├── notion/          # Notion configuration
-│   └── config.go    # Board config storage
-├── ralph/           # Session state management
-│   └── state.go     # State persistence
-├── session/         # Session discovery
-│   ├── session.go   # Session types
-│   ├── manager.go   # Multi-session management
-│   └── discover.go  # Session discovery
-├── tmux/            # Tmux integration
-│   └── session.go   # Tmux session management
-├── worker/          # Parallel worker system
-│   ├── worker.go    # Worker types
-│   ├── registry.go  # Worker registry
-│   ├── lifecycle.go # Start/stop/pause/resume
-│   ├── prompt.go    # Identity injection
-│   ├── lock.go      # Resource locking
-│   └── names.go     # NATO alphabet naming
-├── workspace/       # Workspace management
-│   ├── workspace.go # Core workspace types
-│   ├── repo.go      # Repository operations
-│   ├── worktree.go  # Git worktree management
-│   ├── claudemd.go  # CLAUDE.md generation
-│   └── detect.go    # Conflict detection
-└── theme/           # UI theming
-    └── theme.go     # Color schemes
+├── agent/           # Core agent loop (used by forge)
+├── session/         # Session management (used by forge)
+├── tmux/            # Tmux operations (used by forge)
+├── detector/        # Completion detection (used by forge)
+├── ralph/           # State files (used by forge)
+├── kanban/          # Local issue tracker (used by foundry)
+├── worker/          # Worker system (used by foundry)
+├── leader/          # Leader prompts (used by foundry)
+├── board/           # Board providers (used by foundry)
+├── workspace/       # Workspace ops (used by foundry)
+├── mcp/             # MCP config (used by foundry)
+├── monitor/         # TUI (used by foundry)
+├── github/          # GitHub config (used by foundry)
+├── notion/          # Notion config (used by foundry)
+└── theme/           # UI theming (shared)
 ```
 
-## Key Features
+## Key Concepts
 
-### Worker System
+### Forge (Session Runner)
 
-Parallel workers with NATO alphabet names (alpha, bravo, charlie...):
+Forge is intentionally minimal - it only manages Claude sessions:
 
 ```bash
-forge worker create                  # Create worker
-forge worker list                    # List workers
-forge worker start alpha --task X   # Start worker on task
-forge worker stop alpha             # Stop worker
-forge worker attach alpha           # Attach to session
+forge start "implement feature X"   # Start session
+forge attach                        # Attach to tmux
+forge status                        # Check status
+forge cancel                        # Cancel
+forge list                          # List sessions
+forge log                           # View output
 ```
 
-Workers maintain persistent identity via registry at `~/.forge/workers/registry.yaml`.
+### Foundry (Orchestration)
 
-### Board Providers
-
-Extensible provider interface for external project management:
-
-```go
-type Provider interface {
-    Name() string
-    MCPServers() []string
-    SyncPrompt(oneShot bool) string
-    Configure() error
-    // ...
-}
-```
-
-Current providers:
-- **Notion** (default): `forge board`
-- **GitHub Projects**: `forge board --github`
-
-### Local Kanban
-
-SQLite-based issue tracker:
+Foundry provides higher-level features that use forge internally:
 
 ```bash
-forge kanban                    # Board view
-forge kanban add "Title" -p high
-forge kanban move abc123 done
-forge kanban list
+# Local tools
+foundry kanban                  # Issue tracker
+foundry kanban add "Fix bug"
+
+# Workers (orchestrate multiple forge sessions)
+foundry worker create
+foundry worker start alpha --task "feature"
+
+# External sync
+foundry board --sync            # Notion
+foundry board --github --sync   # GitHub Projects
+
+# Leaders (launch forge with specific prompts)
+foundry planner
+foundry reviewer
+foundry merge
+foundry deploy
+
+# Workspace
+foundry init
+foundry repo add https://github.com/user/repo
+foundry work start "feature"
 ```
+
+## Development Commands
+
+```bash
+make build              # Build both forge and foundry
+make build-forge        # Build forge only
+make build-foundry      # Build foundry only
+make test               # Run all tests
+make install            # Install both to ~/bin
+```
+
+## Adding Features
+
+### To Forge (session management only)
+
+Add to `cmd/forge/` if it's about running/managing Claude sessions.
+
+### To Foundry (everything else)
+
+Add to `cmd/foundry/` for:
+- Local tools (kanban, etc.)
+- Orchestration (workers, leaders)
+- External integrations (board sync)
+- Workspace management
 
 ## Key Patterns
 
-### Command Structure
+### Foundry calling Forge
 
-Each command follows this pattern:
-
-```go
-func newXxxCmd() *cobra.Command {
-    var flags...
-
-    cmd := &cobra.Command{
-        Use:   "xxx",
-        Short: "Brief description",
-        Long:  `Detailed description`,
-        RunE: func(cmd *cobra.Command, args []string) error {
-            // Implementation
-        },
-    }
-
-    cmd.Flags().StringVar(&flag, "name", "default", "description")
-    return cmd
-}
-```
-
-### Leader Pattern
-
-Leaders share infrastructure in `internal/leader/leader.go`:
+Foundry commands that need Claude sessions should call forge:
 
 ```go
-cfg := leader.DefaultConfig(leader.RolePlanner)
-prompt := leader.PlannerPrompt(databaseID, workDir)
-return leader.Run(ctx, cfg, prompt, leader.PlannerPromise())
+// In foundry command
+cmd := exec.Command("forge", "start", prompt)
 ```
 
-### Provider Pattern
-
-Board providers implement the Provider interface:
+### Board Provider Pattern
 
 ```go
 provider := board.GetProvider(board.ProviderGitHub)
@@ -175,122 +151,24 @@ provider.Configure()
 prompt := provider.SyncPrompt(true)
 ```
 
-### Workspace Detection
-
-Commands that need workspace context use:
+### Worker Identity
 
 ```go
-ws, err := workspace.Find(cwd)  // Walks up to find .forge/
+worker := registry.Create(worker.RoleWorker, "")
+// worker.Name = "alpha" (NATO alphabet)
+// worker.ID = "w-abc12345"
 ```
 
-### MCP Configuration
+## State Files
 
-MCP servers are defined in `internal/mcp/servers.go`:
-
-```go
-"github": {
-    Type:    "stdio",
-    Command: "npx",
-    Args:    []string{"-y", "@anthropic/github-mcp-server"},
-    Env:     map[string]string{
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
-    },
-},
-```
-
-## Development Commands
-
-```bash
-make build          # Build to ./bin/forge
-make test           # Run all tests
-make fmt            # Format code (gofumpt + goimports)
-make lint           # Run golangci-lint
-make install        # Install to ~/bin
-```
-
-## Testing
-
-Run specific package tests:
-
-```bash
-go test -v ./internal/agent/...
-go test -v ./internal/kanban/...
-go test -v ./internal/worker/...
-```
-
-## Adding New Features
-
-### New Command
-
-1. Create `cmd/forge/xxx.go` with `newXxxCmd()`
-2. Register in `main.go`: `rootCmd.AddCommand(newXxxCmd())`
-3. Add any needed internal packages
-
-### New Leader
-
-1. Add prompt in `internal/leader/xxx.go`
-2. Add command in `cmd/forge/xxx.go`
-3. Register in main.go
-
-### New Board Provider
-
-1. Create `internal/board/xxx_provider.go` implementing `Provider`
-2. Add constant in `provider.go`
-3. Add case in `GetProvider()`
-
-### New MCP Server
-
-1. Add to `DefaultServers()` in `internal/mcp/servers.go`
-2. Add to `AvailableServers()` list
+- `~/.forge/sessions/*.state.md` - Forge session state
+- `~/.forge/workers/registry.yaml` - Worker registry
+- `.foundry/kanban.db` - Local issue database
+- `.foundry/workspace.yaml` - Workspace config
 
 ## Code Style
 
 - Use standard Go conventions
 - Error messages: lowercase, no punctuation
-- Comments: full sentences for exported items
-- Prefer composition over inheritance
-- Keep functions focused and small
-
-## Key Dependencies
-
-- `github.com/spf13/cobra` - CLI framework
-- `github.com/charmbracelet/bubbletea` - TUI framework
-- `github.com/charmbracelet/lipgloss` - TUI styling
-- `modernc.org/sqlite` - Pure Go SQLite
-- `gopkg.in/yaml.v3` - YAML parsing
-
-## State Files
-
-- `~/.forge/sessions/*.state.md` - Global session state
-- `~/.forge/workers/registry.yaml` - Worker registry
-- `.forge/workspace.yaml` - Workspace config
-- `.forge/worktrees/worktrees.yaml` - Worktree tracking
-- `.forge/kanban.db` - Local issue database
-
-## Common Tasks
-
-### Add a flag to existing command
-
-```go
-cmd.Flags().BoolVar(&myFlag, "my-flag", false, "Description")
-```
-
-### Update workspace CLAUDE.md generation
-
-Edit `internal/workspace/claudemd.go` - the `GenerateClaudeMD()` function.
-
-### Modify leader prompts
-
-Edit the appropriate file in `internal/leader/`:
-- `planner.go` - Planning prompts
-- `reviewer.go` - Review prompts
-- `merge.go` - Merge prompts
-- `deploy.go` - Deployment prompts
-
-### Add worktree functionality
-
-Edit `internal/workspace/worktree.go` for worktree operations.
-
-### Modify worker identity prompts
-
-Edit `internal/worker/prompt.go` for Graphiti memory integration.
+- Keep forge minimal - don't add non-session features
+- Add orchestration features to foundry
