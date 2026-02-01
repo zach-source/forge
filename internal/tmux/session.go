@@ -57,6 +57,10 @@ func (s *Session) Create() error {
 		return fmt.Errorf("creating tmux session: %w", err)
 	}
 
+	// Set up isolated shell environment for forge sessions
+	// This prevents polluting the user's shell history
+	s.setupForgeEnvironment()
+
 	// Set up pipe-pane for logging if log file specified
 	if s.LogFile != "" {
 		pipeCmd := exec.Command("tmux", "pipe-pane", "-t", s.Name, "-o", fmt.Sprintf("cat >> %s", s.LogFile))
@@ -67,6 +71,28 @@ func (s *Session) Create() error {
 	}
 
 	return nil
+}
+
+// setupForgeEnvironment configures the shell environment for forge sessions.
+// This isolates history and sets helpful environment variables.
+func (s *Session) setupForgeEnvironment() {
+	// Set up isolated history file for this session
+	histFile := fmt.Sprintf("/tmp/forge-history-%s", s.Name)
+
+	envSetup := fmt.Sprintf(
+		"export HISTFILE=%s; export FORGE_SESSION=%s; export FORGE_WORKDIR=%s",
+		shellQuote(histFile),
+		shellQuote(s.Name),
+		shellQuote(s.WorkDir),
+	)
+
+	// Send environment setup silently
+	cmd := exec.Command("tmux", "send-keys", "-t", s.Name, envSetup, "Enter")
+	_ = cmd.Run() // Ignore errors, non-critical
+
+	// Clear the screen so the env setup isn't visible
+	clearCmd := exec.Command("tmux", "send-keys", "-t", s.Name, "clear", "Enter")
+	_ = clearCmd.Run()
 }
 
 // Exists returns true if the tmux session exists.
@@ -209,40 +235,64 @@ func (s *Session) WaitForClaudeExit(timeout time.Duration) (string, error) {
 	start := time.Now()
 	pollInterval := 2 * time.Second
 
+	var initialContent string
 	var lastContent string
+	var lastValidContent string
 	stableCount := 0
+	firstPoll := true
 
 	for time.Now().Sub(start) < timeout {
 		content, err := s.CapturePane()
 		if err != nil {
+			// Session disappeared - use last valid content if we have it
+			if lastValidContent != "" {
+				return lastValidContent, nil
+			}
 			return "", err
 		}
 
-		// Check if Claude has exited by looking for shell prompt
-		lines := strings.Split(strings.TrimSpace(content), "\n")
-		if len(lines) > 0 {
-			lastLine := lines[len(lines)-1]
-			// Common prompt patterns indicating Claude exited
-			if isShellPrompt(lastLine) && !strings.Contains(content, "claude") {
-				return content, nil
-			}
+		lastValidContent = content
+
+		// Capture initial content on first poll
+		if firstPoll {
+			initialContent = content
+			firstPoll = false
+			time.Sleep(pollInterval)
+			continue
 		}
 
-		// Also check for content stability (no new output)
-		if content == lastContent {
-			stableCount++
-			if stableCount > 5 && isShellPrompt(lines[len(lines)-1]) {
-				return content, nil
+		lines := strings.Split(strings.TrimSpace(content), "\n")
+		if len(lines) == 0 {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		lastLine := lines[len(lines)-1]
+
+		// Claude has done something if content changed from initial
+		contentChanged := content != initialContent
+
+		// Check for shell prompt at the end - indicates Claude exited
+		// We need content to have changed (meaning Claude ran and finished)
+		if isShellPrompt(lastLine) && contentChanged {
+			// Wait for stability to ensure Claude is really done
+			if content == lastContent {
+				stableCount++
+				if stableCount >= 2 {
+					return content, nil
+				}
+			} else {
+				stableCount = 1
 			}
 		} else {
 			stableCount = 0
 		}
-		lastContent = content
 
+		lastContent = content
 		time.Sleep(pollInterval)
 	}
 
-	return lastContent, fmt.Errorf("timeout waiting for Claude to exit")
+	return lastValidContent, fmt.Errorf("timeout waiting for Claude to exit")
 }
 
 // isShellPrompt checks if a line looks like a shell prompt.
@@ -251,15 +301,19 @@ func isShellPrompt(line string) bool {
 	if line == "" {
 		return false
 	}
-	// Common prompt endings
-	return strings.HasSuffix(line, "$ ") ||
-		strings.HasSuffix(line, "# ") ||
-		strings.HasSuffix(line, "> ") ||
-		strings.HasSuffix(line, "% ") ||
-		strings.HasSuffix(line, "$") ||
-		strings.HasSuffix(line, "#") ||
-		strings.HasSuffix(line, ">") ||
-		strings.HasSuffix(line, "%")
+	// Common prompt endings (including Unicode prompts like Starship's ❯)
+	promptEndings := []string{
+		"$ ", "# ", "> ", "% ",
+		"$", "#", ">", "%",
+		"❯", "➜", "→", "›", // Unicode prompt characters
+		"❯ ", "➜ ", "→ ", "› ",
+	}
+	for _, ending := range promptEndings {
+		if strings.HasSuffix(line, ending) {
+			return true
+		}
+	}
+	return false
 }
 
 // shellQuote quotes a string for safe shell usage.

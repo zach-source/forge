@@ -1,11 +1,11 @@
 ---
-name: forge
+name: foundry:forge
 description: Start or manage Claude sessions
-aliases: ["session"]
+aliases: ["forge", "session"]
 user_invocable: true
 ---
 
-# /forge Command
+# /foundry:forge Command
 
 Quick access to forge session runner.
 

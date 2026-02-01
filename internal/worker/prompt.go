@@ -6,7 +6,12 @@ import (
 )
 
 // WorkerIdentityPrompt generates the identity section to prepend to worker prompts.
-func WorkerIdentityPrompt(w *Worker, taskID string) string {
+// If promise is empty, uses the default WorkerPromise.
+func WorkerIdentityPrompt(w *Worker, taskID string, promise string) string {
+	if promise == "" {
+		promise = WorkerPromise(w)
+	}
+
 	var sb strings.Builder
 
 	sb.WriteString("## Your Identity\n\n")
@@ -31,7 +36,7 @@ func WorkerIdentityPrompt(w *Worker, taskID string) string {
 
 	sb.WriteString("\n## Completion\n\n")
 	sb.WriteString(fmt.Sprintf("When you have completed your task, output:\n"))
-	sb.WriteString(fmt.Sprintf("```\n<promise>%s</promise>\n```\n", WorkerPromise(w)))
+	sb.WriteString(fmt.Sprintf("```\n<promise>%s</promise>\n```\n", promise))
 
 	return sb.String()
 }
@@ -58,7 +63,7 @@ func formatRole(role Role) string {
 func TaskPrompt(w *Worker, task, description string) string {
 	var sb strings.Builder
 
-	identity := WorkerIdentityPrompt(w, task)
+	identity := WorkerIdentityPrompt(w, task, "")
 	sb.WriteString(identity)
 
 	sb.WriteString("\n---\n\n")

@@ -1,5 +1,5 @@
 ---
-name: forge
+name: foundry:forge
 description: Minimal Claude session runner. Use when starting, attaching, or managing Claude sessions in tmux.
 triggers:
   - "start claude session"

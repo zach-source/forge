@@ -1,11 +1,11 @@
 ---
-name: kanban
+name: foundry:kanban
 description: Quick access to foundry kanban
-aliases: ["kb", "issues"]
+aliases: ["kanban", "kb", "issues"]
 user_invocable: true
 ---
 
-# /kanban Command
+# /foundry:kanban Command
 
 Quick access to foundry kanban issue tracker.
 

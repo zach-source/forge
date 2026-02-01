@@ -165,10 +165,21 @@ func (a *Agent) Run(ctx context.Context) error {
 			fmt.Printf("Warning: error waiting for Claude: %v\n", err)
 		}
 
-		// Check for completion
+		// Check for completion - even if we got an error, check the output we have
 		result := a.detector.Check(output)
 		if result.Complete {
 			return a.handleComplete(state, result.Promises)
+		}
+
+		// If session is gone and we have output, it might have exited cleanly
+		// but we missed detecting it - check one more time
+		if !a.session.Exists() {
+			if output != "" {
+				// We have output but no completion - unusual, log it
+				fmt.Printf("Warning: session ended without completion promise\n")
+			}
+			// Session is gone, can't continue
+			return fmt.Errorf("tmux session ended unexpectedly")
 		}
 
 		// Check if state file was deleted (external cancel)

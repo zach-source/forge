@@ -1,11 +1,11 @@
 ---
-name: worker
+name: foundry:worker
 description: Manage foundry parallel workers
-aliases: ["w", "workers"]
+aliases: ["worker", "w", "workers"]
 user_invocable: true
 ---
 
-# /worker Command
+# /foundry:worker Command
 
 Quick access to foundry worker management.
 

@@ -55,17 +55,17 @@ func Start(ctx context.Context, reg *Registry, workerID string, opts StartOption
 	// Build session ID
 	sessionID := w.TmuxSessionName()
 
-	// Build worker-aware prompt
-	fullPrompt := opts.Prompt
-	if opts.TaskID != "" {
-		identity := WorkerIdentityPrompt(w, opts.TaskID)
-		fullPrompt = identity + "\n\n" + opts.Prompt
-	}
-
 	// Build promise
 	promise := opts.Promise
 	if promise == "" {
 		promise = WorkerPromise(w)
+	}
+
+	// Build worker-aware prompt
+	fullPrompt := opts.Prompt
+	if opts.TaskID != "" {
+		identity := WorkerIdentityPrompt(w, opts.TaskID, promise)
+		fullPrompt = identity + "\n\n" + opts.Prompt
 	}
 
 	// Build agent config

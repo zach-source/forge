@@ -9,24 +9,33 @@ This repository contains two complementary CLI tools:
 | Tool | Purpose | Scope |
 |------|---------|-------|
 | **Forge** | Claude session runner | Minimal - start/attach/monitor sessions |
-| **Foundry** | Orchestration platform | Full - workers, boards, kanban, workspace |
+| **Foundry** | Orchestration platform | Full - supervisor, workers, kanban, leaders |
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                         FOUNDRY                                 │
-│  Workers │ Kanban │ Board Sync │ Leaders │ Workspace           │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│                          FORGE                                  │
-│            start │ attach │ status │ cancel │ list │ log       │
-└────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│                      TMUX + CLAUDE                              │
-└────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        SUPERVISOR                                │
+│     Orchestrates workers + leaders through kanban workflow       │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+┌───────────────┐      ┌───────────────┐      ┌───────────────┐
+│    WORKERS    │      │    LEADERS    │      │    KANBAN     │
+│ alpha, bravo  │      │ planner       │      │ SQLite-based  │
+│ charlie, ...  │      │ reviewer      │      │ issue tracker │
+│ (NATO names)  │      │ merge, deploy │      │               │
+└───────┬───────┘      └───────┬───────┘      └───────────────┘
+        │                      │
+        └──────────┬───────────┘
+                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          FORGE                                   │
+│             start │ attach │ status │ cancel │ list │ log       │
+└───────────────────────────────┬─────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       TMUX + CLAUDE                              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Installation
@@ -86,18 +95,51 @@ foundry kanban list
 
 Status shortcuts: `b`acklog, `t`odo, `p`rogress, `r`eview, `d`one
 
+### Supervisor
+
+Automated orchestration that coordinates workers and leaders through the kanban workflow:
+
+```bash
+# Run supervisor with 30-second intervals
+foundry supervisor --interval 30s
+
+# Enable all leader agents (planner, reviewer, merge, deploy)
+foundry supervisor --leaders
+
+# Full autonomous workflow
+foundry supervisor --interval 1m --leaders
+```
+
+Workflow: `todo` → `in_progress` (worker) → `review` (reviewer) → `done` → merge → deploy
+
 ### Parallel Workers
 
 NATO-named workers with persistent identity:
 
 ```bash
+# Create workers
 foundry worker create               # Creates "alpha"
-foundry worker create               # Creates "bravo"
+foundry worker create --alias dev   # Creates "bravo" with alias
+foundry worker create --role planner # Create a leader worker
+
+# Manage workers
+foundry worker list                 # List all workers
+foundry worker list --active        # Show only active
 foundry worker start alpha --task "implement auth"
-foundry worker list
-foundry worker attach alpha
 foundry worker stop alpha
+foundry worker pause alpha          # Suspend session
+foundry worker resume alpha         # Resume session
+
+# Monitor
+foundry worker status alpha         # Detailed status
+foundry worker attach alpha         # Attach to tmux
+foundry worker log alpha -n 50      # View output
+
+# Reassign work
+foundry worker reassign alpha bravo # Transfer task
 ```
+
+Worker roles: `worker`, `planner`, `reviewer`, `merge`, `deploy`
 
 ### External Board Sync
 
@@ -148,11 +190,37 @@ foundry work complete "user-auth"
 
 ## Development Workflow
 
+### Automated (Supervisor)
+
+```bash
+# Add tasks to kanban
+foundry kanban add "Set up React project" -p critical -s todo
+foundry kanban add "Build user auth" -p high -s todo
+foundry kanban add "Add tests" -p medium -s todo
+
+# Create workers
+foundry worker create                    # alpha (worker)
+foundry worker create --role reviewer    # bravo (reviewer)
+foundry worker create --role merge       # charlie (merge)
+
+# Run supervisor - handles everything automatically
+foundry supervisor --leaders --interval 30s
 ```
-1. Plan      → foundry planner         → Creates tasks in Notion/kanban
+
+The supervisor will:
+1. Assign idle workers to todo tasks
+2. Move completed tasks to review
+3. Launch reviewer to check completed work
+4. Launch merge leader when all tasks done
+5. Launch deploy leader after merge
+
+### Manual
+
+```
+1. Plan      → foundry planner         → Creates tasks in kanban
 2. Start     → foundry work start      → Creates isolated worktree
 3. Develop   → foundry worker start    → Claude works autonomously
-4. Review    → foundry reviewer        → Reviews from main branch
+4. Review    → foundry reviewer        → Reviews completed work
 5. Merge     → foundry merge           → Single-threaded merge
 6. Deploy    → foundry deploy          → Deploy and verify
 ```
@@ -170,8 +238,9 @@ export GITHUB_TOKEN=ghp_xxx          # GitHub Projects
 
 | Path | Purpose |
 |------|---------|
-| `~/.forge/sessions/` | Session state files |
-| `~/.forge/workers/` | Worker registry |
+| `~/.forge/sessions/*.state.md` | Session state files |
+| `~/.forge/workers/registry.yaml` | Worker registry |
+| `~/.forge/workers/locks/*.lock` | Resource locks (merge/deploy) |
 | `.foundry/kanban.db` | Local issue database |
 | `.foundry/workspace.yaml` | Workspace config |
 
@@ -191,7 +260,7 @@ make install        # Install to ~/bin
 
 ```
 cmd/
-├── forge/           # Minimal session runner
+├── forge/              # Minimal session runner
 │   ├── start.go
 │   ├── attach.go
 │   ├── status.go
@@ -199,28 +268,35 @@ cmd/
 │   ├── list.go
 │   └── log.go
 │
-└── foundry/         # Full orchestration
-    ├── kanban.go    # Local issues
-    ├── worker.go    # Parallel workers
-    ├── board.go     # Board sync
-    ├── monitor.go   # TUI dashboard
-    ├── planner.go   # Planning leader
-    ├── reviewer.go  # Review leader
-    ├── merge.go     # Merge leader
-    ├── deploy.go    # Deploy leader
-    ├── init.go      # Workspace init
-    ├── repo.go      # Repo management
-    └── work.go      # Worktree management
+└── foundry/            # Full orchestration
+    ├── supervisor.go   # Orchestration loop
+    ├── kanban.go       # Local issues
+    ├── worker.go       # Parallel workers
+    ├── board.go        # Board sync
+    ├── monitor.go      # TUI dashboard
+    ├── planner.go      # Planning leader
+    ├── reviewer.go     # Review leader
+    ├── merge.go        # Merge leader
+    ├── deploy.go       # Deploy leader
+    ├── init.go         # Workspace init
+    ├── repo.go         # Repo management
+    └── work.go         # Worktree management
 
 internal/
-├── agent/           # Agent loop
-├── kanban/          # SQLite issue tracker
-├── worker/          # Worker system
-├── board/           # Board providers
-├── leader/          # Leader prompts
-├── workspace/       # Workspace ops
-├── session/         # Session management
-├── tmux/            # Tmux operations
+├── agent/              # Agent loop with tmux
+├── worker/             # Worker system
+│   ├── worker.go       # Worker type, roles, status
+│   ├── registry.go     # YAML persistence, CRUD
+│   ├── lifecycle.go    # Start, pause, resume, stop
+│   ├── prompt.go       # Identity injection
+│   ├── lock.go         # Resource locks (merge/deploy)
+│   └── names.go        # NATO alphabet generation
+├── kanban/             # SQLite issue tracker
+├── board/              # Board providers
+├── leader/             # Leader prompts
+├── workspace/          # Workspace ops
+├── session/            # Session management
+├── tmux/               # Tmux operations
 └── ...
 ```
 

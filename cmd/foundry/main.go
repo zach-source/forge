@@ -43,6 +43,7 @@ Examples:
 		newWorkerCmd(),
 		newBoardCmd(),
 		newMonitorCmd(),
+		newSupervisorCmd(),
 		// Leaders (launch forge sessions)
 		newPlannerCmd(),
 		newReviewerCmd(),

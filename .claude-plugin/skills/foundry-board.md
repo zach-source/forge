@@ -1,5 +1,5 @@
 ---
-name: foundry-board
+name: foundry:board
 description: Sync with external project boards (Notion, GitHub Projects). Use when syncing tasks from project management tools.
 triggers:
   - "board sync"

@@ -1,11 +1,11 @@
 ---
-name: foundry
+name: foundry:main
 description: Development orchestration platform
-aliases: ["fd"]
+aliases: ["foundry", "fd"]
 user_invocable: true
 ---
 
-# /foundry Command
+# /foundry:main Command
 
 Quick access to foundry orchestration.
 
@@ -22,12 +22,17 @@ Quick access to foundry orchestration.
 
 | Command | Action |
 |---------|--------|
+| `/foundry supervisor` | Start automated orchestration |
+| `/foundry supervisor --leaders` | With leader agents |
 | `/foundry kanban` | View kanban board |
 | `/foundry kanban add X` | Add issue |
 | `/foundry worker` | List workers |
 | `/foundry worker create` | Create worker |
 | `/foundry board --sync` | Sync with board |
 | `/foundry planner` | Start planner |
+| `/foundry reviewer` | Start reviewer |
+| `/foundry merge` | Start merge leader |
+| `/foundry deploy` | Start deploy leader |
 | `/foundry init` | Init workspace |
 
 ## Examples

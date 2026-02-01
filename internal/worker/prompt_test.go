@@ -14,7 +14,7 @@ func TestWorkerIdentityPrompt(t *testing.T) {
 		Worktree: "/path/to/worktree",
 	}
 
-	prompt := WorkerIdentityPrompt(w, "task-123")
+	prompt := WorkerIdentityPrompt(w, "task-123", "")
 
 	// Check identity section
 	if !strings.Contains(prompt, "**api-dev**") {

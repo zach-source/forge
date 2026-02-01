@@ -1,13 +1,15 @@
 {
   "name": "forge-foundry",
-  "version": "1.0.0",
-  "description": "Development automation: forge (session runner) + foundry (orchestration platform)",
+  "version": "1.1.0",
+  "description": "Development automation: forge (session runner) + foundry (orchestration platform with supervisor)",
   "author": "zach-source",
   "repository": "https://github.com/zach-source/forge",
-  "keywords": ["automation", "orchestration", "workers", "kanban", "tmux", "claude"],
+  "keywords": ["automation", "orchestration", "workers", "kanban", "tmux", "claude", "supervisor"],
   "skills": [
     "skills/forge.md",
     "skills/foundry.md",
+    "skills/foundry-supervisor.md",
+    "skills/foundry-leaders.md",
     "skills/foundry-kanban.md",
     "skills/foundry-worker.md",
     "skills/foundry-board.md"
@@ -15,6 +17,8 @@
   "commands": [
     "commands/forge.md",
     "commands/foundry.md",
+    "commands/supervisor.md",
+    "commands/leaders.md",
     "commands/kanban.md",
     "commands/worker.md"
   ]

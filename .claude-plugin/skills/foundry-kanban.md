@@ -1,5 +1,5 @@
 ---
-name: foundry-kanban
+name: foundry:kanban
 description: Local kanban issue tracker with SQLite. Use when tracking tasks, managing issues, or viewing project board.
 triggers:
   - "kanban"

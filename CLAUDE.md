@@ -12,12 +12,13 @@ This repository contains two CLI tools:
 - Session lifecycle management (start, attach, status, cancel, list, log)
 
 **Foundry** - Development orchestration platform
-- Builds on top of forge for higher-level workflows
-- Parallel workers with persistent identity
+- Supervisor for automated workflow orchestration
+- Parallel workers with persistent identity (NATO alphabet naming)
 - External board sync (Notion, GitHub Projects)
-- Local kanban issue tracking
+- Local kanban issue tracking (SQLite)
 - Workspace and worktree management
 - Leader agents (planner, reviewer, merge, deploy)
+- Resource locking for single-threaded operations
 
 ## Architecture
 
@@ -34,6 +35,7 @@ cmd/
 │
 └── foundry/             # Orchestration platform
     ├── main.go          # Entry point
+    ├── supervisor.go    # Orchestration loop
     ├── kanban.go        # Local issue tracker
     ├── worker.go        # Parallel workers
     ├── board.go         # Notion/GitHub sync
@@ -54,6 +56,12 @@ internal/
 ├── ralph/           # State files (used by forge)
 ├── kanban/          # Local issue tracker (used by foundry)
 ├── worker/          # Worker system (used by foundry)
+│   ├── worker.go    # Worker type, roles, status
+│   ├── registry.go  # YAML persistence, CRUD
+│   ├── lifecycle.go # Start, pause, resume, stop
+│   ├── prompt.go    # Identity injection
+│   ├── lock.go      # Resource locks (merge/deploy)
+│   └── names.go     # NATO alphabet generation
 ├── leader/          # Leader prompts (used by foundry)
 ├── board/           # Board providers (used by foundry)
 ├── workspace/       # Workspace ops (used by foundry)
@@ -84,17 +92,25 @@ forge log                           # View output
 Foundry provides higher-level features that use forge internally:
 
 ```bash
-# Local tools
-foundry kanban                  # Issue tracker
-foundry kanban add "Fix bug"
+# Supervisor - automated orchestration
+foundry supervisor                    # Default 2m interval
+foundry supervisor --interval 30s     # Faster polling
+foundry supervisor --leaders          # Enable all leader agents
 
-# Workers (orchestrate multiple forge sessions)
-foundry worker create
+# Local kanban
+foundry kanban                        # View board
+foundry kanban add "Fix bug" -p high -s todo
+
+# Workers (parallel Claude sessions)
+foundry worker create                 # Creates "alpha"
+foundry worker create --role reviewer # Create leader worker
 foundry worker start alpha --task "feature"
+foundry worker list --active
+foundry worker stop alpha
 
 # External sync
-foundry board --sync            # Notion
-foundry board --github --sync   # GitHub Projects
+foundry board --sync                  # Notion
+foundry board --github --sync         # GitHub Projects
 
 # Leaders (launch forge with specific prompts)
 foundry planner
@@ -154,15 +170,60 @@ prompt := provider.SyncPrompt(true)
 ### Worker Identity
 
 ```go
-worker := registry.Create(worker.RoleWorker, "")
-// worker.Name = "alpha" (NATO alphabet)
-// worker.ID = "w-abc12345"
+reg, _ := worker.LoadRegistry()
+w, _ := reg.Create(worker.RoleWorker, "")
+// w.Name = "alpha" (NATO alphabet)
+// w.ID = "w-abc12345"
+
+// Start worker
+opts := worker.StartOptions{
+    TaskID:   "task-123",
+    Worktree: "/path/to/worktree",
+    Prompt:   "Implement feature X",
+}
+worker.Start(ctx, reg, w.ID, opts)
+```
+
+### Worker Lifecycle
+
+```go
+worker.Start(ctx, reg, workerID, opts)  // Start session
+worker.Pause(reg, workerID)              // Suspend (Ctrl+Z)
+worker.Resume(reg, workerID)             // Resume (fg)
+worker.Stop(reg, workerID)               // Kill session
+worker.Reset(reg, workerID)              // Clear task/worktree
+worker.Reassign(reg, fromID, toID)       // Transfer work
+```
+
+### Worker Roles
+
+| Role | Purpose | Single-threaded |
+|------|---------|-----------------|
+| `worker` | Development tasks | No |
+| `planner` | Planning, task breakdown | No |
+| `reviewer` | Code review | No |
+| `merge` | PR merge coordination | Yes (locked) |
+| `deploy` | Deployment | Yes (locked) |
+
+### Supervisor Pattern
+
+```go
+// Supervisor runs a loop that:
+// 1. Checks for completed workers → moves tasks to review
+// 2. Pokes active workers periodically
+// 3. Assigns idle workers to todo tasks
+// 4. Launches leaders when appropriate:
+//    - Reviewer when tasks in review
+//    - Planner when backlog needs prioritization
+//    - Merge when all tasks done
+//    - Deploy after merge complete
 ```
 
 ## State Files
 
 - `~/.forge/sessions/*.state.md` - Forge session state
 - `~/.forge/workers/registry.yaml` - Worker registry
+- `~/.forge/workers/locks/*.lock` - Resource locks (merge/deploy)
 - `.foundry/kanban.db` - Local issue database
 - `.foundry/workspace.yaml` - Workspace config
 

@@ -1,12 +1,13 @@
 ---
-name: foundry
-description: Development orchestration platform. Use for kanban, workers, board sync, leaders, and workspace management.
+name: foundry:main
+description: Development orchestration platform. Use for supervisor, kanban, workers, board sync, leaders, and workspace management.
 triggers:
   - "foundry"
   - "orchestration"
   - "development workflow"
   - "workspace"
   - "leader agent"
+  - "supervisor"
 ---
 
 # Foundry - Development Orchestration Platform
@@ -17,6 +18,7 @@ Foundry provides high-level development automation on top of forge.
 
 | Feature | Command | Purpose |
 |---------|---------|---------|
+| Supervisor | `foundry supervisor` | Automated orchestration |
 | Kanban | `foundry kanban` | Local issue tracking |
 | Workers | `foundry worker` | Parallel Claude instances |
 | Board Sync | `foundry board` | Notion/GitHub sync |
@@ -26,6 +28,9 @@ Foundry provides high-level development automation on top of forge.
 ## Quick Start
 
 ```bash
+# Supervisor - automated workflow
+foundry supervisor --leaders --interval 30s
+
 # Local kanban
 foundry kanban add "Fix bug" -p high
 foundry kanban move abc123 done
@@ -43,7 +48,21 @@ foundry planner
 foundry reviewer
 ```
 
-## Workflow
+## Automated Workflow (Supervisor)
+
+```bash
+# Setup
+foundry kanban add "Task 1" -s todo
+foundry worker create                    # alpha
+foundry worker create --role reviewer    # bravo
+
+# Run
+foundry supervisor --leaders
+
+# Workflow: todo → in_progress → review → done → merge → deploy
+```
+
+## Manual Workflow
 
 ```
 foundry planner     → Plan tasks
@@ -65,4 +84,5 @@ Foundry calls forge internally for session management.
 
 - `.foundry/kanban.db` - Local issues
 - `.foundry/workspace.yaml` - Workspace config
-- `~/.forge/workers/` - Worker registry
+- `~/.forge/workers/registry.yaml` - Worker registry
+- `~/.forge/workers/locks/` - Resource locks
