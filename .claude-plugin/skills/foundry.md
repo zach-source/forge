@@ -1,97 +1,68 @@
 ---
 name: foundry
-description: Local-first development toolkit with kanban tracking. Use when tracking issues, viewing project board, or managing local development tasks.
+description: Development orchestration platform. Use for kanban, workers, board sync, leaders, and workspace management.
 triggers:
   - "foundry"
-  - "local kanban"
-  - "issue tracker"
-  - "track tasks"
-  - "project board"
+  - "orchestration"
+  - "development workflow"
+  - "workspace"
+  - "leader agent"
 ---
 
-# Foundry - Local-First Development Toolkit
+# Foundry - Development Orchestration Platform
 
-Foundry is a lightweight, local-first toolkit for developers. All data is stored in `.foundry/` using SQLite - no external dependencies.
+Foundry provides high-level development automation on top of forge.
 
-## Kanban Issue Tracker
+## Features
 
-### View Board
-```bash
-foundry kanban              # Show board
-foundry kb                  # Alias
-foundry i                   # Short alias
-```
+| Feature | Command | Purpose |
+|---------|---------|---------|
+| Kanban | `foundry kanban` | Local issue tracking |
+| Workers | `foundry worker` | Parallel Claude instances |
+| Board Sync | `foundry board` | Notion/GitHub sync |
+| Leaders | `foundry planner/reviewer/merge/deploy` | Specialized agents |
+| Workspace | `foundry init/repo/work` | Multi-repo management |
 
-### Quick Add
-```bash
-foundry kanban add "Fix bug"
-foundry kanban add "Feature" -p high -l "feature,api"
-```
-
-Options:
-- `-p`: Priority (low, medium, high, critical)
-- `-s`: Initial status (backlog, todo, in_progress, review, done)
-- `-l`: Labels (comma-separated)
-- `-a`: Assignee
-- `-d`: Description
-
-### Move with Shortcuts
-```bash
-foundry kanban move <id> <status>
-```
-
-Status shortcuts:
-- `b` = backlog
-- `t` = todo
-- `p` = in_progress
-- `r` = review
-- `d` = done
-
-Examples:
-```bash
-foundry kanban move abc123 t    # → todo
-foundry kanban move abc123 p    # → in_progress
-foundry kanban move abc123 d    # → done
-```
-
-### List & Filter
-```bash
-foundry kanban list              # All issues
-foundry kanban ls -s todo        # Filter by status
-```
-
-### Show Details
-```bash
-foundry kanban show <id>
-```
-
-### Edit & Delete
-```bash
-foundry kanban edit <id> -t "New title" -p critical
-foundry kanban delete <id> -f
-```
-
-## Workflow Example
+## Quick Start
 
 ```bash
-# Start a task
-foundry kanban add "Implement auth" -p high
+# Local kanban
+foundry kanban add "Fix bug" -p high
+foundry kanban move abc123 done
 
-# Work on it
-foundry kanban move abc123 p
+# Workers
+foundry worker create
+foundry worker start alpha --task "feature"
 
-# Review
-foundry kanban move abc123 r
+# Board sync
+foundry board --sync           # Notion
+foundry board --github --sync  # GitHub
 
-# Complete
-foundry kanban move abc123 d
-
-# View progress
-foundry kanban
+# Leaders
+foundry planner
+foundry reviewer
 ```
+
+## Workflow
+
+```
+foundry planner     → Plan tasks
+foundry work start  → Create worktree
+foundry worker      → Execute in parallel
+foundry reviewer    → Review code
+foundry merge       → Merge to main
+foundry deploy      → Deploy & verify
+```
+
+## Relationship to Forge
+
+- **Forge** = Run individual Claude sessions
+- **Foundry** = Orchestrate multiple forge sessions
+
+Foundry calls forge internally for session management.
 
 ## Data Storage
 
-- Location: `.foundry/kanban.db`
-- Format: SQLite (no CGO required)
-- IDs: Short 8-char hex (e.g., `abc12345`)
+- `.foundry/kanban.db` - Local issues
+- `.foundry/workspace.yaml` - Workspace config
+- `~/.forge/workers/` - Worker registry

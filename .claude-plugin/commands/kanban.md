@@ -1,52 +1,58 @@
 ---
 name: kanban
-description: Quick access to local kanban issue tracker
+description: Quick access to foundry kanban
 aliases: ["kb", "issues"]
 user_invocable: true
 ---
 
 # /kanban Command
 
-Quick access to the forge kanban issue tracker.
+Quick access to foundry kanban issue tracker.
 
 ## Usage
 
 ```
 /kanban              # Show board
 /kanban add <title>  # Add issue
-/kanban <id>         # Show issue details
+/kanban <id>         # Show issue
+/kanban <id> <status> # Move issue
 ```
 
 ## Behavior
 
-When invoked:
-
-1. **No arguments**: Display the kanban board view
+1. **No arguments**: Show board
    ```bash
-   forge kanban
+   foundry kanban
    ```
 
-2. **With "add" + title**: Create a new issue
+2. **"add" + title**: Add issue
    ```bash
-   forge kanban add "$ARGS"
+   foundry kanban add "$TITLE"
    ```
 
-3. **With issue ID**: Show issue details
+3. **ID only**: Show details
    ```bash
-   forge kanban show "$ARGS"
+   foundry kanban show "$ID"
    ```
+
+4. **ID + status**: Move issue
+   ```bash
+   foundry kanban move "$ID" "$STATUS"
+   ```
+
+## Status Shortcuts
+
+- `b` = backlog
+- `t` = todo
+- `p` = in_progress
+- `r` = review
+- `d` = done
 
 ## Examples
 
 ```
 /kanban
-/kanban add Fix authentication bug
+/kanban add Fix the login bug
 /kanban abc123
+/kanban abc123 d
 ```
-
-## Quick Actions
-
-After viewing the board, suggest common actions:
-- Move an issue: `forge kanban move <id> <status>`
-- Add priority: `forge kanban add "title" -p high`
-- Filter: `forge kanban list -s in_progress`

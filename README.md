@@ -1,13 +1,38 @@
-# Forge
+# Forge & Foundry
 
-Autonomous Claude execution orchestrator for software development workflows.
+Development automation tools for Claude-powered workflows.
 
-Forge spawns Claude in tmux sessions for attachable, persistent execution with MCP server integration. It coordinates the full development lifecycle through specialized leader agents.
+## Overview
+
+This repository contains two complementary CLI tools:
+
+| Tool | Purpose | Scope |
+|------|---------|-------|
+| **Forge** | Claude session runner | Minimal - start/attach/monitor sessions |
+| **Foundry** | Orchestration platform | Full - workers, boards, kanban, workspace |
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                         FOUNDRY                                 │
+│  Workers │ Kanban │ Board Sync │ Leaders │ Workspace           │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│                          FORGE                                  │
+│            start │ attach │ status │ cancel │ list │ log       │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│                      TMUX + CLAUDE                              │
+└────────────────────────────────────────────────────────────────┘
+```
 
 ## Installation
 
 ```bash
-# Build
+# Build both tools
 make build
 
 # Install to ~/bin
@@ -15,145 +40,121 @@ make install
 
 # Verify
 forge --version
+foundry --version
 ```
 
-## Quick Start
+## Forge - Session Runner
+
+Forge runs Claude sessions in tmux with completion detection.
 
 ```bash
-# Initialize a workspace
-forge init my-project
-cd my-project
+# Start a session
+forge start "implement user authentication"
 
-# Add repositories
-forge repo add https://github.com/user/api.git
-forge repo describe api --summary "REST API" --tech "Go,PostgreSQL"
+# Attach to running session
+forge attach
 
-# Configure Notion (optional)
+# Check status
+forge status
+
+# View output
+forge log
+
+# List all sessions
+forge list
+
+# Cancel a session
+forge cancel
+```
+
+That's it. Forge is intentionally minimal.
+
+## Foundry - Orchestration Platform
+
+Foundry provides higher-level development automation.
+
+### Local Kanban
+
+SQLite-based issue tracker:
+
+```bash
+foundry kanban                      # View board
+foundry kanban add "Fix bug" -p high
+foundry kanban move abc123 done     # or: move abc123 d
+foundry kanban list
+```
+
+Status shortcuts: `b`acklog, `t`odo, `p`rogress, `r`eview, `d`one
+
+### Parallel Workers
+
+NATO-named workers with persistent identity:
+
+```bash
+foundry worker create               # Creates "alpha"
+foundry worker create               # Creates "bravo"
+foundry worker start alpha --task "implement auth"
+foundry worker list
+foundry worker attach alpha
+foundry worker stop alpha
+```
+
+### External Board Sync
+
+Sync with Notion or GitHub Projects:
+
+```bash
+# Notion
 export NOTION_API_TOKEN=secret_xxx
-forge board --config
+foundry board --config
+foundry board --sync
 
-# Start planning
-forge planner
+# GitHub Projects
+export GITHUB_TOKEN=ghp_xxx
+foundry board --github --config
+foundry board --github --sync
 ```
 
-## Architecture
+### Leader Agents
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         FORGE CLI                                │
-├─────────────────────────────────────────────────────────────────┤
-│  Workspace     │  Worktree      │  Leaders         │  Core      │
-│  ─────────     │  ────────      │  ───────         │  ────      │
-│  init          │  work start    │  planner         │  start     │
-│  repo add      │  work list     │  reviewer        │  attach    │
-│  repo link     │  work attach   │  merge           │  status    │
-│  repo describe │  work complete │  deploy          │  monitor   │
-│  board         │  work abandon  │                  │  cancel    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      TMUX SESSION                                │
-│  claude -p "<prompt>" --mcp-config <config> --allowedTools "*"  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       MCP SERVERS                                │
-│  Notion │ Graphiti │ Context7 │ Sequential-Thinking             │
-└─────────────────────────────────────────────────────────────────┘
-```
+Specialized Claude agents for workflow stages:
 
-## Commands
+```bash
+foundry planner     # Strategic planning, task breakdown
+foundry reviewer    # Code review, issue creation
+foundry merge       # PR merge coordination (single-threaded)
+foundry deploy      # Deployment and smoke testing
+```
 
 ### Workspace Management
 
-```bash
-forge init [dir]                    # Initialize workspace
-forge repo add <url>                # Clone repository
-forge repo link <path>              # Link existing repo
-forge repo list                     # List repositories
-forge repo describe <name>          # Set repo metadata
-forge repo primary <name>           # Set primary repo
-forge repo sync                     # Update CLAUDE.md
-```
-
-### Worktree Development
+Multi-repo workspace with git worktrees:
 
 ```bash
-forge work start <name> --repo api  # Create feature worktree
-forge work list                     # List active worktrees
-forge work attach <name>            # Launch Claude in worktree
-forge work complete <name>          # Mark ready for merge
-forge work abandon <name>           # Remove worktree
-```
+# Initialize workspace
+foundry init my-project
+cd my-project
 
-### Board & Notion
+# Add repositories
+foundry repo add https://github.com/user/api.git
+foundry repo add https://github.com/user/web.git
 
-```bash
-forge board --config                # Configure Notion database
-forge board --sync                  # One-shot sync
-forge board                         # Interactive session
-forge board --watch                 # Continuous sync
-```
+# Start feature development
+foundry work start "user-auth" --repo api
 
-### Leaders
-
-```bash
-forge planner                       # Strategic planning
-forge reviewer                      # Code review
-forge merge                         # Merge coordination
-forge deploy                        # Deployment & testing
-```
-
-### Autonomous Execution
-
-```bash
-forge start "<task>" -p DONE        # Start autonomous task
-forge attach                        # Attach to session
-forge status                        # View session status
-forge monitor                       # TUI dashboard
-forge cancel                        # Cancel session
-forge list                          # List all sessions
-forge log                           # View session log
+# Complete feature
+foundry work complete "user-auth"
 ```
 
 ## Development Workflow
 
-### Worktree-Based Development
-
-1. **Plan**: `forge planner` → Create epics/features in Notion
-2. **Create worktree**: `forge work start "feature-name" --repo api`
-3. **Develop**: Claude works in isolated worktree
-4. **Complete**: `forge work complete "feature-name"`
-5. **Review**: `forge reviewer` → Review from main
-6. **Merge**: `forge merge` → Single-threaded merge to main
-7. **Deploy**: `forge deploy` → Deploy & smoke test
-
-### Leader Responsibilities
-
-| Leader | Works From | Creates |
-|--------|------------|---------|
-| Planner | Notion | Epics, Features → Notion + Beads |
-| Reviewer | main/develop | Issues for code findings |
-| Merge Leader | Feature branches | Merges to main |
-| Deploy Leader | main | Issues for failures |
-
-## Workspace Structure
-
 ```
-workspace/
-├── CLAUDE.md                 # Auto-generated documentation
-├── .forge/
-│   ├── workspace.yaml        # Workspace configuration
-│   ├── repos/                # Cloned repositories
-│   ├── worktrees/            # Feature worktrees
-│   │   ├── <repo>/
-│   │   │   └── <feature>/    # Isolated working directory
-│   │   └── worktrees.yaml    # Worktree tracking
-│   ├── sessions/             # Session state files
-│   └── logs/                 # Log files
-└── (linked repos)
+1. Plan      → foundry planner         → Creates tasks in Notion/kanban
+2. Start     → foundry work start      → Creates isolated worktree
+3. Develop   → foundry worker start    → Claude works autonomously
+4. Review    → foundry reviewer        → Reviews from main branch
+5. Merge     → foundry merge           → Single-threaded merge
+6. Deploy    → foundry deploy          → Deploy and verify
 ```
 
 ## Configuration
@@ -161,42 +162,66 @@ workspace/
 ### Environment Variables
 
 ```bash
-export NOTION_API_TOKEN=secret_xxx  # Notion integration token
+export NOTION_API_TOKEN=secret_xxx   # Notion integration
+export GITHUB_TOKEN=ghp_xxx          # GitHub Projects
 ```
 
-### Notion Setup
+### File Locations
 
-1. Create integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
-2. Share database with integration
-3. Run `forge board --config` with database ID
-
-See [docs/notion-board-setup.md](docs/notion-board-setup.md) for detailed setup.
-
-## MCP Servers
-
-Forge uses these MCP servers:
-
-| Server | Purpose |
-|--------|---------|
-| Notion | Board sync, issue management |
-| Graphiti | Persistent memory, decisions |
-| Context7 | Library documentation |
-| Sequential-Thinking | Complex reasoning |
+| Path | Purpose |
+|------|---------|
+| `~/.forge/sessions/` | Session state files |
+| `~/.forge/workers/` | Worker registry |
+| `.foundry/kanban.db` | Local issue database |
+| `.foundry/workspace.yaml` | Workspace config |
 
 ## Development
 
 ```bash
-# Build
-make build
+make build          # Build both tools
+make build-forge    # Build forge only
+make build-foundry  # Build foundry only
+make test           # Run tests
+make fmt            # Format code
+make lint           # Lint code
+make install        # Install to ~/bin
+```
 
-# Run tests
-make test
+## Architecture
 
-# Format code
-make fmt
+```
+cmd/
+├── forge/           # Minimal session runner
+│   ├── start.go
+│   ├── attach.go
+│   ├── status.go
+│   ├── cancel.go
+│   ├── list.go
+│   └── log.go
+│
+└── foundry/         # Full orchestration
+    ├── kanban.go    # Local issues
+    ├── worker.go    # Parallel workers
+    ├── board.go     # Board sync
+    ├── monitor.go   # TUI dashboard
+    ├── planner.go   # Planning leader
+    ├── reviewer.go  # Review leader
+    ├── merge.go     # Merge leader
+    ├── deploy.go    # Deploy leader
+    ├── init.go      # Workspace init
+    ├── repo.go      # Repo management
+    └── work.go      # Worktree management
 
-# Lint
-make lint
+internal/
+├── agent/           # Agent loop
+├── kanban/          # SQLite issue tracker
+├── worker/          # Worker system
+├── board/           # Board providers
+├── leader/          # Leader prompts
+├── workspace/       # Workspace ops
+├── session/         # Session management
+├── tmux/            # Tmux operations
+└── ...
 ```
 
 ## License

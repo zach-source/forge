@@ -1,21 +1,21 @@
 {
-  "name": "forge",
+  "name": "forge-foundry",
   "version": "1.0.0",
-  "description": "Autonomous Claude execution orchestrator with parallel workers, kanban tracking, and board sync",
+  "description": "Development automation: forge (session runner) + foundry (orchestration platform)",
   "author": "zach-source",
   "repository": "https://github.com/zach-source/forge",
-  "keywords": ["automation", "orchestration", "workers", "kanban", "tmux", "foundry"],
+  "keywords": ["automation", "orchestration", "workers", "kanban", "tmux", "claude"],
   "skills": [
-    "skills/forge-kanban.md",
-    "skills/forge-worker.md",
-    "skills/forge-board.md",
-    "skills/forge-session.md",
-    "skills/foundry.md"
+    "skills/forge.md",
+    "skills/foundry.md",
+    "skills/foundry-kanban.md",
+    "skills/foundry-worker.md",
+    "skills/foundry-board.md"
   ],
   "commands": [
+    "commands/forge.md",
+    "commands/foundry.md",
     "commands/kanban.md",
-    "commands/worker.md",
-    "commands/board-sync.md",
-    "commands/foundry.md"
+    "commands/worker.md"
   ]
 }

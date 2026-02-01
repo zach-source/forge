@@ -1,67 +1,41 @@
 ---
 name: foundry
-description: Local-first development toolkit
+description: Development orchestration platform
 aliases: ["fd"]
 user_invocable: true
 ---
 
 # /foundry Command
 
-Quick access to the foundry toolkit.
+Quick access to foundry orchestration.
 
 ## Usage
 
 ```
-/foundry              # Show kanban board
-/foundry add <title>  # Add issue
-/foundry <id>         # Show issue
-/foundry <id> <status> # Move issue
+/foundry              # Show help
+/foundry kanban       # View kanban board
+/foundry worker       # List workers
+/foundry board        # Board sync status
 ```
 
-## Behavior
+## Subcommands
 
-1. **No arguments**: Show kanban board
-   ```bash
-   foundry kanban
-   ```
-
-2. **"add" + title**: Create issue
-   ```bash
-   foundry kanban add "$ARGS"
-   ```
-
-3. **Issue ID only**: Show details
-   ```bash
-   foundry kanban show "$ID"
-   ```
-
-4. **ID + status**: Move issue
-   ```bash
-   foundry kanban move "$ID" "$STATUS"
-   ```
+| Command | Action |
+|---------|--------|
+| `/foundry kanban` | View kanban board |
+| `/foundry kanban add X` | Add issue |
+| `/foundry worker` | List workers |
+| `/foundry worker create` | Create worker |
+| `/foundry board --sync` | Sync with board |
+| `/foundry planner` | Start planner |
+| `/foundry init` | Init workspace |
 
 ## Examples
 
 ```
 /foundry
-/foundry add Fix the login bug
-/foundry abc123
-/foundry abc123 done
+/foundry kanban
+/foundry kanban add Fix the login bug
+/foundry worker create
+/foundry board --github --sync
 ```
-
-## Status Shortcuts
-
-- `b` = backlog
-- `t` = todo
-- `p` = in_progress
-- `r` = review
-- `d` = done
-
-## Quick Reference
-
-| Command | Action |
-|---------|--------|
-| `/foundry` | View board |
-| `/foundry add X` | Add issue |
-| `/foundry ID` | Show issue |
-| `/foundry ID d` | Mark done |
