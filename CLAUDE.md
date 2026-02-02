@@ -214,6 +214,7 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 
 ```go
 // Supervisor runs a loop that:
+// 0. Health check → detects stale workers (session gone or Claude exited)
 // 1. Checks for completed workers → moves tasks to review
 // 2. Pokes active workers periodically
 // 3. Assigns idle workers to todo tasks
@@ -231,6 +232,8 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 // --auto-requeue       Automatically requeue stuck tasks
 // --leaders            Enable all leader agents
 // --no-auto-assign     Only monitor, don't assign tasks
+// --cleanup-orphans    Clean up orphaned tmux sessions on startup
+// --dry-run            Preview cleanup without taking action
 ```
 
 ## State Files

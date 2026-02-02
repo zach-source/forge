@@ -33,7 +33,18 @@ foundry killall               # Alias
 | Forge sessions | Claude sessions running in tmux (started by `forge start`) |
 | Leader sessions | Planner, reviewer, merge, deploy agents |
 | Sync sessions | GitHub/Notion board sync sessions |
-| Orphaned tmux | Any remaining forge-related tmux sessions |
+| Orphaned tmux | Any remaining forge-related tmux sessions (`forge-`, `mforge-`, `mf-`) |
+
+## Alternative: Supervisor Cleanup
+
+For cleanup without full shutdown, use the supervisor's orphan cleanup:
+
+```bash
+foundry supervisor --cleanup-orphans --dry-run  # Preview what would be cleaned
+foundry supervisor --cleanup-orphans            # Clean up and continue
+```
+
+This cleans orphaned sessions but keeps the supervisor running.
 
 ## Manual Shutdown
 

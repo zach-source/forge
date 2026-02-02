@@ -26,6 +26,10 @@ foundry supervisor -d /path           # Custom working directory
 foundry supervisor --auto-requeue     # Auto-requeue stuck tasks
 foundry supervisor --analyze-interval 10m  # Task analysis frequency
 foundry supervisor --stuck 30m        # Stuck task threshold
+
+# Health checks and cleanup
+foundry supervisor --cleanup-orphans  # Clean up orphaned tmux sessions
+foundry supervisor --dry-run          # Preview cleanup without taking action
 ```
 
 ## Workflow
@@ -35,11 +39,27 @@ todo → in_progress (worker) → review (reviewer) → done → merge → deplo
 ```
 
 The supervisor:
-1. **Assigns tasks** - Idle workers get todo tasks
-2. **Monitors progress** - Pokes active workers periodically
-3. **Handles completion** - Moves finished tasks to review
-4. **Analyzes stuck tasks** - Requeues tasks stuck too long (--auto-requeue)
-5. **Coordinates leaders** - Launches reviewer/merge/deploy when appropriate
+1. **Health checks** - Detects stale workers (session gone or Claude exited)
+2. **Assigns tasks** - Idle workers get todo tasks
+3. **Monitors progress** - Pokes active workers periodically
+4. **Handles completion** - Moves finished tasks to review
+5. **Analyzes stuck tasks** - Requeues tasks stuck too long (--auto-requeue)
+6. **Coordinates leaders** - Launches reviewer/merge/deploy when appropriate
+
+## Health Checks
+
+Each cycle, the supervisor:
+- Verifies all active workers have running tmux sessions
+- Detects when Claude has exited (shell prompt visible)
+- Resets stale workers to idle and clears leader state
+- Restores leader state from registry on startup
+
+### Orphan Cleanup
+
+On startup with `--cleanup-orphans`:
+- Finds tmux sessions not tracked in worker registry
+- Covers legacy prefixes: `forge-`, `mforge-`, `mf-`
+- Use `--dry-run` to preview without taking action
 
 ## Setup
 

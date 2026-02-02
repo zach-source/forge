@@ -16,6 +16,7 @@ Automated orchestration that coordinates workers and leaders through the kanban 
 /supervisor fast         # 30s interval
 /supervisor leaders      # Enable leader agents
 /supervisor full         # Leaders + 30s interval
+/supervisor cleanup      # Clean up orphaned sessions
 ```
 
 ## Behavior
@@ -40,6 +41,11 @@ Automated orchestration that coordinates workers and leaders through the kanban 
    foundry supervisor --leaders --interval 30s
    ```
 
+5. **"cleanup"**: Clean up orphaned tmux sessions
+   ```bash
+   foundry supervisor --cleanup-orphans --dry-run
+   ```
+
 ## Workflow
 
 ```
@@ -47,10 +53,11 @@ todo → in_progress (worker) → review (reviewer) → done → merge → deplo
 ```
 
 The supervisor:
-1. Assigns idle workers to todo tasks
-2. Pokes active workers periodically
-3. Moves finished tasks to review
-4. Launches leader agents when appropriate
+1. Health checks - Detects stale workers (session gone or Claude exited)
+2. Assigns idle workers to todo tasks
+3. Pokes active workers periodically
+4. Moves finished tasks to review
+5. Launches leader agents when appropriate
 
 ## Setup Example
 

@@ -114,6 +114,12 @@ foundry supervisor --auto-requeue --stuck 30m
 
 # Custom analysis interval
 foundry supervisor --analyze-interval 10m --auto-requeue
+
+# Health check: clean up orphaned tmux sessions on startup
+foundry supervisor --cleanup-orphans
+
+# Preview cleanup without taking action
+foundry supervisor --cleanup-orphans --dry-run
 ```
 
 Workflow: `todo` → `in_progress` (worker) → `review` (reviewer) → `done` → merge → deploy
@@ -123,6 +129,8 @@ Features:
 - Pokes active workers periodically
 - Analyzes stuck tasks and requeues them
 - Launches leaders based on workflow state
+- **Health checks**: Detects stale workers (session gone or Claude exited)
+- **Orphan cleanup**: Cleans up untracked tmux sessions (forge-, mforge-, mf-)
 
 ### Parallel Workers
 
