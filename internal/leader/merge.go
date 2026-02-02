@@ -219,6 +219,12 @@ Then create a Notion issue for the failure.
 4. **Update all tracking**: Notion + beads + worktree + Graphiti
 5. **Be cautious**: When in doubt, don't merge
 
+%s
+
+%s
+
+%s
+
 ## Begin
 
 Start by:
@@ -229,10 +235,11 @@ Start by:
 5. Reporting the merge queue
 
 Then wait for merge instructions.`, targetBranch, targetBranch, dryRunNote, databaseID, workDir, targetBranch,
-		targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch)
+		targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch, targetBranch,
+		OutputFormat, HandoffProtocol, SequentialThinkingTriggers)
 }
 
 // MergePromise returns the completion promise for merge leader.
 func MergePromise() string {
-	return "MERGE_COMPLETE"
+	return PromiseMerge
 }

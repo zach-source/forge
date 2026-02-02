@@ -15,7 +15,7 @@ This repository contains two CLI tools:
 - Supervisor for automated workflow orchestration
 - Parallel workers with persistent identity (NATO alphabet naming)
 - External board sync (Notion, GitHub Projects)
-- Local kanban issue tracking (SQLite)
+- Local kanban issue tracking (view on beads)
 - Workspace and worktree management
 - Leader agents (planner, reviewer, merge, deploy)
 - Resource locking for single-threaded operations
@@ -40,6 +40,7 @@ cmd/
     ├── worker.go        # Parallel workers
     ├── board.go         # Notion/GitHub sync
     ├── monitor.go       # TUI dashboard
+    ├── shutdown.go      # Stop all agents
     ├── planner.go       # Planning leader
     ├── reviewer.go      # Review leader
     ├── merge.go         # Merge leader
@@ -117,6 +118,10 @@ foundry planner
 foundry reviewer
 foundry merge
 foundry deploy
+
+# Shutdown all agents
+foundry shutdown              # Graceful shutdown
+foundry shutdown --force      # Force kill all sessions
 
 # Workspace
 foundry init
@@ -212,11 +217,20 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 // 1. Checks for completed workers → moves tasks to review
 // 2. Pokes active workers periodically
 // 3. Assigns idle workers to todo tasks
-// 4. Launches leaders when appropriate:
+// 4. Analyzes stuck tasks → requeues if --auto-requeue enabled
+// 5. Launches leaders when appropriate:
 //    - Reviewer when tasks in review
 //    - Planner when backlog needs prioritization
 //    - Merge when all tasks done
 //    - Deploy after merge complete
+
+// Config flags:
+// --interval 30s       Cycle interval (default 2m)
+// --analyze-interval   Task analysis interval (default 15m)
+// --stuck 30m          Threshold for stuck tasks (default 30m)
+// --auto-requeue       Automatically requeue stuck tasks
+// --leaders            Enable all leader agents
+// --no-auto-assign     Only monitor, don't assign tasks
 ```
 
 ## State Files
@@ -224,7 +238,7 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 - `~/.forge/sessions/*.state.md` - Forge session state
 - `~/.forge/workers/registry.yaml` - Worker registry
 - `~/.forge/workers/locks/*.lock` - Resource locks (merge/deploy)
-- `.foundry/kanban.db` - Local issue database
+- `.beads/` - Issue database (used by kanban view)
 - `.foundry/workspace.yaml` - Workspace config
 
 ## Code Style

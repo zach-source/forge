@@ -111,6 +111,10 @@ Properties to set:
 4. **Be specific**: Vague items get lost - make acceptance criteria clear
 5. **Think dependencies**: What blocks what?
 
+%s
+
+%s
+
 ## Begin
 
 Start by:
@@ -119,10 +123,10 @@ Start by:
 3. Checking current beads
 4. Reporting the current state
 
-Then wait for planning instructions.`, databaseID, workDir)
+Then wait for planning instructions.`, databaseID, workDir, OutputFormat, HandoffProtocol)
 }
 
 // PlannerPromise returns the completion promise for planner.
 func PlannerPromise() string {
-	return "PLANNING_COMPLETE"
+	return PromisePlanner
 }

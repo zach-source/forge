@@ -21,6 +21,11 @@ foundry supervisor --interval 30s     # Faster polling
 foundry supervisor --leaders          # Enable all leader agents
 foundry supervisor --no-auto-assign   # Only monitor, don't assign
 foundry supervisor -d /path           # Custom working directory
+
+# Task analysis and requeue
+foundry supervisor --auto-requeue     # Auto-requeue stuck tasks
+foundry supervisor --analyze-interval 10m  # Task analysis frequency
+foundry supervisor --stuck 30m        # Stuck task threshold
 ```
 
 ## Workflow
@@ -33,7 +38,8 @@ The supervisor:
 1. **Assigns tasks** - Idle workers get todo tasks
 2. **Monitors progress** - Pokes active workers periodically
 3. **Handles completion** - Moves finished tasks to review
-4. **Coordinates leaders** - Launches reviewer/merge/deploy when appropriate
+4. **Analyzes stuck tasks** - Requeues tasks stuck too long (--auto-requeue)
+5. **Coordinates leaders** - Launches reviewer/merge/deploy when appropriate
 
 ## Setup
 
@@ -103,6 +109,31 @@ $ foundry supervisor --leaders --interval 30s
 🔍 Starting reviewer charlie
 ```
 
+## Task Analysis & Requeue
+
+When `--auto-requeue` is enabled, the supervisor periodically analyzes tasks:
+
+```bash
+foundry supervisor --auto-requeue --stuck 30m --analyze-interval 10m
+```
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `--auto-requeue` | false | Enable automatic requeue |
+| `--stuck` | 30m | Time before task is considered stuck |
+| `--analyze-interval` | 15m | How often to run analysis |
+
+The analyzer:
+- Identifies tasks stuck in `in_progress` too long
+- Checks for abandoned work (worker stopped but task not moved)
+- Requeues stuck tasks back to `todo` for reassignment
+- Suggests new tasks based on patterns
+
 ## Stopping
 
 Press `Ctrl+C` to gracefully stop the supervisor. Active workers will continue running independently.
+
+To stop all agents including workers, use:
+```bash
+foundry shutdown
+```

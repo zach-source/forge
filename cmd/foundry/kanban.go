@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -11,38 +10,24 @@ import (
 	"golang.org/x/term"
 )
 
-func getFoundryDir() (string, error) {
+func getKanbanStore() (*kanban.Store, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("getting working directory: %w", err)
+		return nil, fmt.Errorf("getting working directory: %w", err)
 	}
-
-	foundryDir := filepath.Join(cwd, ".foundry")
-	if err := os.MkdirAll(foundryDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating .foundry directory: %w", err)
-	}
-
-	return foundryDir, nil
-}
-
-func getKanbanStore() (*kanban.Store, error) {
-	foundryDir, err := getFoundryDir()
-	if err != nil {
-		return nil, err
-	}
-
-	dbPath := filepath.Join(foundryDir, "kanban.db")
-	return kanban.NewStore(dbPath)
+	// Store wraps bd CLI which looks for .beads/ in the working directory
+	return kanban.NewStore(cwd)
 }
 
 func newKanbanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "kanban",
 		Aliases: []string{"kb", "issues", "i"},
-		Short:   "Local kanban issue tracker",
-		Long: `Local kanban-style issue tracker with SQLite storage.
+		Short:   "Kanban view on beads issue tracker",
+		Long: `Kanban-style view of issues stored in .beads/ (via bd CLI).
 
-Issues are stored in .foundry/kanban.db in the current directory.
+This is a lightweight frontend on top of the beads issue tracker.
+Issues are stored in .beads/ and managed by the bd command.
 
 Examples:
   foundry kanban                     # Show board view
@@ -60,6 +45,7 @@ Examples:
 		newKanbanMoveCmd(),
 		newKanbanEditCmd(),
 		newKanbanDeleteCmd(),
+		newKanbanMigrateCmd(),
 	)
 
 	// Default to board view

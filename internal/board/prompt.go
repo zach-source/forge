@@ -140,6 +140,45 @@ add_memory({
 4. **Atomic updates** - Complete each item's sync before moving to next
 5. **Track changes** - Keep a running list of all changes made
 
+## Error Handling
+
+### API Rate Limits
+If you receive rate limit errors (429 status):
+1. Wait 60 seconds before retrying
+2. Reduce batch size (sync one item at a time)
+3. Store progress in Graphiti so you can resume:
+` + "```" + `
+add_memory({
+  content: "Sync paused at item <id> due to rate limit",
+  group_id: "forge-board-sync"
+})
+` + "```" + `
+
+### Partial Failures
+If a sync operation fails mid-way:
+1. Do NOT retry the entire sync
+2. Store the last successful item in Graphiti
+3. Report the failure clearly with item ID
+4. Output completion promise to prevent supervisor restart loops
+
+### Conflict Detection
+If you detect conflicting state that cannot be auto-resolved:
+1. Do NOT make assumptions
+2. Create a conflict report:
+` + "```" + `
+add_memory({
+  content: "CONFLICT: <item-id> - Notion says <status>, bead says <status>",
+  group_id: "forge-board-sync"
+})
+` + "```" + `
+3. Report to user: ` + "`CONFLICT: [item-id] - requires manual resolution`" + `
+
+### Network Errors
+If Notion API is unavailable:
+1. Store partial progress in Graphiti
+2. Report the error clearly
+3. Output completion promise with error summary
+
 `)
 
 	if oneShot {

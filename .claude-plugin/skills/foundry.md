@@ -23,6 +23,7 @@ Foundry provides high-level development automation on top of forge.
 | Workers | `foundry worker` | Parallel Claude instances |
 | Board Sync | `foundry board` | Notion/GitHub sync |
 | Leaders | `foundry planner/reviewer/merge/deploy` | Specialized agents |
+| Shutdown | `foundry shutdown` | Stop all agents |
 | Workspace | `foundry init/repo/work` | Multi-repo management |
 
 ## Quick Start
@@ -82,7 +83,7 @@ Foundry calls forge internally for session management.
 
 ## Data Storage
 
-- `.foundry/kanban.db` - Local issues
+- `.beads/` - Issue database (used by kanban view)
 - `.foundry/workspace.yaml` - Workspace config
 - `~/.forge/workers/registry.yaml` - Worker registry
 - `~/.forge/workers/locks/` - Resource locks

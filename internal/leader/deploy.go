@@ -260,6 +260,12 @@ If deployment causes problems:
 4. **Stay vigilant post-deploy**: Watch for 15+ minutes
 5. **Rollback early**: When in doubt, roll back
 
+%s
+
+%s
+
+%s
+
 ## Begin
 
 Start by:
@@ -269,10 +275,11 @@ Start by:
 4. Reporting deployment readiness
 
 Then wait for deployment instructions.`, environment, dryRunNote, databaseID, workDir, environment,
-		environment, environment, environment, environment, environment)
+		environment, environment, environment, environment, environment,
+		OutputFormat, HandoffProtocol, SequentialThinkingTriggers)
 }
 
 // DeployPromise returns the completion promise for deployment leader.
 func DeployPromise() string {
-	return "DEPLOYMENT_COMPLETE"
+	return PromiseDeploy
 }

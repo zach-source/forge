@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/kanban"
+	"github.com/zach-source/forge/internal/leader"
 	"github.com/zach-source/forge/internal/tmux"
 	"github.com/zach-source/forge/internal/worker"
 )
 
 func newSupervisorCmd() *cobra.Command {
 	var (
-		interval    time.Duration
-		maxPokes    int
-		workDir     string
-		autoAssign  bool
-		withLeaders bool
+		interval        time.Duration
+		analyzeInterval time.Duration
+		stuckThreshold  time.Duration
+		maxPokes        int
+		workDir         string
+		autoAssign      bool
+		withLeaders     bool
+		autoRequeue     bool
 	)
 
 	cmd := &cobra.Command{
@@ -36,6 +39,12 @@ The supervisor manages:
 3. Planner - Plans new tasks and verifies progress
 4. Merge - Coordinates merging completed work
 5. Deploy - Handles deployment when ready
+6. Analyzer - Checks completed work for follow-up tasks
+
+Task Analysis:
+- Automatically requeues stuck tasks (in_progress with no worker)
+- Analyzes completed work to discover new tasks
+- Checks for incomplete work or TODO comments
 
 Workflow: todo -> in_progress (worker) -> review (reviewer) -> done
 
@@ -43,7 +52,8 @@ Examples:
   foundry supervisor                    # Default 2 minute interval
   foundry supervisor --interval 1m      # Check every minute
   foundry supervisor --leaders          # Enable all leader agents
-  foundry supervisor --no-auto-assign   # Only monitor, don't start new tasks`,
+  foundry supervisor --no-auto-assign   # Only monitor, don't start new tasks
+  foundry supervisor --stuck 5m         # Requeue tasks stuck for 5 minutes`,
 		Aliases: []string{"sup", "orchestrate"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workDir == "" {
@@ -54,30 +64,39 @@ Examples:
 				workDir = wd
 			}
 			return runSupervisor(cmd.Context(), supervisorConfig{
-				interval:    interval,
-				maxPokes:    maxPokes,
-				workDir:     workDir,
-				autoAssign:  autoAssign,
-				withLeaders: withLeaders,
+				interval:        interval,
+				analyzeInterval: analyzeInterval,
+				stuckThreshold:  stuckThreshold,
+				maxPokes:        maxPokes,
+				workDir:         workDir,
+				autoAssign:      autoAssign,
+				withLeaders:     withLeaders,
+				autoRequeue:     autoRequeue,
 			})
 		},
 	}
 
 	cmd.Flags().DurationVarP(&interval, "interval", "i", 2*time.Minute, "Time between checks")
+	cmd.Flags().DurationVar(&analyzeInterval, "analyze-interval", 10*time.Minute, "Time between task analysis runs")
+	cmd.Flags().DurationVar(&stuckThreshold, "stuck", 10*time.Minute, "Requeue tasks stuck longer than this")
 	cmd.Flags().IntVar(&maxPokes, "max-pokes", 10, "Max pokes per worker before escalating (0 = unlimited)")
 	cmd.Flags().StringVarP(&workDir, "dir", "d", "", "Working directory (default: current)")
 	cmd.Flags().BoolVar(&autoAssign, "auto-assign", true, "Automatically assign tasks to idle workers")
 	cmd.Flags().BoolVar(&withLeaders, "leaders", false, "Enable all leader agents (planner, reviewer, merge, deploy)")
+	cmd.Flags().BoolVar(&autoRequeue, "auto-requeue", true, "Automatically requeue stuck tasks")
 
 	return cmd
 }
 
 type supervisorConfig struct {
-	interval    time.Duration
-	maxPokes    int
-	workDir     string
-	autoAssign  bool
-	withLeaders bool
+	interval        time.Duration
+	analyzeInterval time.Duration
+	stuckThreshold  time.Duration
+	maxPokes        int
+	workDir         string
+	autoAssign      bool
+	withLeaders     bool
+	autoRequeue     bool
 }
 
 type leaderState struct {
@@ -92,16 +111,24 @@ type supervisorState struct {
 	workerTasks    map[string]string // worker ID -> task ID
 	completedTasks map[string]bool   // completed task IDs
 
+	// Task timing
+	taskStarted map[string]time.Time // task ID -> when it entered in_progress
+
 	// Leader states
 	planner  leaderState
 	reviewer leaderState
 	merge    leaderState
 	deploy   leaderState
+	analyzer leaderState // for task analysis
 
 	// Workflow tracking
 	allTasksDone    bool
 	mergeCompleted  bool
 	deployCompleted bool
+
+	// Analysis tracking
+	lastAnalysis    time.Time // when we last ran the analyzer
+	analysisResults []string  // recommendations from last analysis
 }
 
 func newSupervisorState() *supervisorState {
@@ -110,6 +137,7 @@ func newSupervisorState() *supervisorState {
 		taskWorkers:    make(map[string]string),
 		workerTasks:    make(map[string]string),
 		completedTasks: make(map[string]bool),
+		taskStarted:    make(map[string]time.Time),
 	}
 }
 
@@ -173,25 +201,33 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 	// 1. Check for completed workers and update tasks
 	checkCompletedWorkers(store, reg, state)
 
-	// 2. Check leader sessions
+	// 2. Analyze tasks - check for stuck/abandoned tasks that need requeuing
+	analyzeAndRequeueTasks(store, reg, state, cfg)
+
+	// 3. Check leader sessions
 	if cfg.withLeaders {
 		checkLeaderSessions(reg, state)
 	}
 
-	// 3. Poke active workers
+	// 4. Poke active workers
 	pokeActiveWorkers(reg, state, cfg.maxPokes)
 
-	// 4. Assign idle workers to todo tasks
+	// 5. Assign idle workers to todo tasks
 	if cfg.autoAssign {
 		assignTasks(store, reg, state, cfg.workDir)
 	}
 
-	// 5. Run leader workflow if enabled
+	// 6. Run leader workflow if enabled
 	if cfg.withLeaders {
 		runLeaderWorkflow(store, reg, state, cfg.workDir)
 	}
 
-	// 6. Summary
+	// 7. Run task analyzer if needed (check for new tasks from completed work)
+	if cfg.withLeaders {
+		checkForNewTasks(store, reg, state, cfg.workDir, cfg)
+	}
+
+	// 8. Summary
 	printSummary(store, reg, state)
 }
 
@@ -239,6 +275,133 @@ func checkCompletedWorkers(store *kanban.Store, reg *worker.Registry, state *sup
 	}
 }
 
+// analyzeAndRequeueTasks checks for tasks that are stuck or abandoned and requeues them
+func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
+	if !cfg.autoRequeue {
+		return
+	}
+
+	// Get all in_progress tasks
+	inProgressTasks, err := store.List(kanban.StatusInProgress)
+	if err != nil {
+		return
+	}
+
+	activeWorkers := reg.List(worker.StatusActive)
+	activeWorkerIDs := make(map[string]bool)
+	for _, w := range activeWorkers {
+		activeWorkerIDs[w.ID] = true
+	}
+
+	for _, task := range inProgressTasks {
+		// Track when we first saw this task in progress
+		if _, tracked := state.taskStarted[task.ID]; !tracked {
+			state.taskStarted[task.ID] = time.Now()
+		}
+
+		// Check if this task has an active worker
+		assignedWorker := state.taskWorkers[task.ID]
+		hasActiveWorker := assignedWorker != "" && activeWorkerIDs[assignedWorker]
+
+		if !hasActiveWorker {
+			// No worker on this task - check how long it's been stuck
+			timeInProgress := time.Since(state.taskStarted[task.ID])
+
+			if timeInProgress > cfg.stuckThreshold {
+				// Task has been stuck without a worker - requeue it
+				fmt.Printf("🔄 Requeuing stuck task %s (no worker for %s)\n", task.ID[:8], timeInProgress.Round(time.Second))
+				fmt.Printf("   Title: %s\n", task.Title)
+
+				if err := store.Move(task.ID, kanban.StatusTodo); err != nil {
+					fmt.Printf("   ⚠️  Error requeuing: %v\n", err)
+				} else {
+					fmt.Printf("   ✅ Moved back to Todo\n")
+					delete(state.taskStarted, task.ID)
+					delete(state.taskWorkers, task.ID)
+				}
+			}
+		}
+	}
+
+	// Also check review tasks - if they've been in review too long without reviewer
+	reviewTasks, err := store.List(kanban.StatusReview)
+	if err != nil {
+		return
+	}
+
+	reviewThreshold := cfg.stuckThreshold * 2 // Review can take longer
+
+	for _, task := range reviewTasks {
+		if _, tracked := state.taskStarted[task.ID]; !tracked {
+			state.taskStarted[task.ID] = time.Now()
+		}
+
+		// If no reviewer is active and task has been waiting too long
+		if !state.reviewer.running {
+			timeInReview := time.Since(state.taskStarted[task.ID])
+			if timeInReview > reviewThreshold {
+				fmt.Printf("⏰ Task %s waiting for review: %s\n", task.ID[:8], timeInReview.Round(time.Second))
+			}
+		}
+	}
+}
+
+// checkForNewTasks analyzes completed work and determines if new tasks are needed
+func checkForNewTasks(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, cfg supervisorConfig) {
+	// Only run analysis periodically (not every cycle)
+	if time.Since(state.lastAnalysis) < cfg.analyzeInterval {
+		return
+	}
+
+	// Don't analyze if we're busy with other work
+	if state.analyzer.running || state.reviewer.running || state.planner.running {
+		return
+	}
+
+	// Check if any worker is active
+	for _, w := range reg.List(worker.StatusActive) {
+		if w.Role == worker.RoleWorker {
+			return // Don't analyze while workers are active
+		}
+	}
+
+	// Get board state
+	board, err := store.GetBoard()
+	if err != nil {
+		return
+	}
+
+	// Count tasks
+	var doneCount, backlogCount, todoCount int
+	for _, col := range board.Columns {
+		switch col.Status {
+		case kanban.StatusDone:
+			doneCount = len(col.Issues)
+		case kanban.StatusBacklog:
+			backlogCount = len(col.Issues)
+		case kanban.StatusTodo:
+			todoCount = len(col.Issues)
+		}
+	}
+
+	// Only analyze if we have completed tasks and low pipeline
+	if doneCount == 0 || (backlogCount+todoCount) > 5 {
+		return // Enough work in the pipeline
+	}
+
+	// Find an analyzer worker (or use planner role)
+	analyzer := findIdleLeader(reg, worker.RolePlanner)
+	if analyzer == nil {
+		return
+	}
+
+	fmt.Printf("🔬 Starting task analysis (checking for follow-up work)\n")
+
+	prompt := buildTaskAnalyzerPrompt(board, workDir)
+	state.lastAnalysis = time.Now()
+	startLeader(reg, analyzer, &state.analyzer, workDir, prompt, "ANALYZER_DONE")
+}
+
 func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 	// Check each leader type
 	checkLeader := func(role worker.Role, ls *leaderState, name string) {
@@ -268,6 +431,16 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 	checkLeader(worker.RoleReviewer, &state.reviewer, "Reviewer")
 	checkLeader(worker.RoleMerge, &state.merge, "Merge leader")
 	checkLeader(worker.RoleDeploy, &state.deploy, "Deploy leader")
+
+	// Analyzer uses planner role but different state
+	if state.analyzer.running {
+		session := tmux.NewSession(state.analyzer.sessionID, "", "")
+		if !session.Exists() {
+			fmt.Printf("🏁 Task analyzer finished\n")
+			state.analyzer.running = false
+			state.analyzer.sessionID = ""
+		}
+	}
 }
 
 func pokeActiveWorkers(reg *worker.Registry, state *supervisorState, maxPokes int) {
@@ -519,25 +692,44 @@ func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a CODE REVIEWER. Your job is to review completed work.\n\n")
-	sb.WriteString("## Tasks in Review\n\n")
+	sb.WriteString("You are a CODE REVIEWER for the Forge supervisor. Your job is to review completed work.\n\n")
 
+	sb.WriteString("## Tasks in Review\n\n")
+	reviewCount := 0
 	for _, col := range board.Columns {
 		if col.Status == kanban.StatusReview {
 			for _, issue := range col.Issues {
 				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
+				if issue.Description != "" {
+					sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
+				}
+				reviewCount++
 			}
 		}
 	}
+	if reviewCount == 0 {
+		sb.WriteString("(no tasks in review)\n")
+	}
 
-	sb.WriteString("\n## Your Tasks\n\n")
-	sb.WriteString("1. Check the files created for each task in review\n")
-	sb.WriteString("2. Verify code quality, completeness, and correctness\n")
-	sb.WriteString("3. If task is good: `foundry kanban move <id> done`\n")
-	sb.WriteString("4. If task needs work: `foundry kanban move <id> todo` and add a note\n\n")
+	sb.WriteString("\n## Review Checklist\n\n")
+	sb.WriteString("For each task, verify:\n")
+	sb.WriteString("- [ ] Code compiles/runs without errors\n")
+	sb.WriteString("- [ ] Tests pass (if applicable)\n")
+	sb.WriteString("- [ ] Code follows project conventions\n")
+	sb.WriteString("- [ ] No obvious bugs or security issues\n")
+	sb.WriteString("- [ ] Changes match the task description\n\n")
+
+	sb.WriteString("## Your Tasks\n\n")
+	sb.WriteString("1. Check handoffs from workers: `search_memory_facts({ query: \"forge-handoff TO: reviewer\" })`\n")
+	sb.WriteString("2. Review files changed for each task\n")
+	sb.WriteString("3. Run `git diff` and `git status` to see changes\n")
+	sb.WriteString("4. Run tests if available: `make test` or equivalent\n")
+	sb.WriteString("5. For approved tasks: `foundry kanban move <id> done`\n")
+	sb.WriteString("6. For rejected tasks: `foundry kanban move <id> todo` and create issue with feedback\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
-	sb.WriteString("When finished reviewing all tasks, output: <promise>REVIEWER_DONE</promise>\n")
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen finished reviewing all tasks, output: <promise>%s</promise>\n", leader.PromiseReviewer))
 
 	return sb.String()
 }
@@ -545,25 +737,41 @@ func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 func buildPlannerPrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a PROJECT PLANNER. Your job is to plan and prioritize work.\n\n")
-	sb.WriteString("## Current Board State\n\n")
+	sb.WriteString("You are a PROJECT PLANNER for the Forge supervisor. Your job is to plan and prioritize work.\n\n")
 
+	sb.WriteString("## Current Board State\n\n")
 	for _, col := range board.Columns {
 		sb.WriteString(fmt.Sprintf("### %s (%d)\n", col.Status, len(col.Issues)))
 		for _, issue := range col.Issues {
 			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
+			if issue.Description != "" {
+				sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
+			}
 		}
 		sb.WriteString("\n")
 	}
 
+	sb.WriteString("## Prioritization Guidelines\n\n")
+	sb.WriteString("- **critical**: Blocks everything, must do immediately\n")
+	sb.WriteString("- **high**: Important for current sprint\n")
+	sb.WriteString("- **medium**: Should do soon\n")
+	sb.WriteString("- **low**: Nice to have, backlog\n\n")
+
+	sb.WriteString("Consider:\n")
+	sb.WriteString("- Dependencies (what unblocks the most?)\n")
+	sb.WriteString("- Risk (tackle unknowns early)\n")
+	sb.WriteString("- Value (user impact)\n\n")
+
 	sb.WriteString("## Your Tasks\n\n")
-	sb.WriteString("1. Review backlog tasks and move important ones to todo\n")
-	sb.WriteString("2. Add any missing tasks needed for the project\n")
-	sb.WriteString("3. Prioritize: `foundry kanban move <id> todo`\n")
-	sb.WriteString("4. Add tasks: `foundry kanban add \"title\" -p high -s todo`\n\n")
+	sb.WriteString("1. Load planning context: `search_nodes({ query: \"project roadmap goals\" })`\n")
+	sb.WriteString("2. Review backlog tasks and assess priorities\n")
+	sb.WriteString("3. Move prioritized items to todo: `foundry kanban move <id> todo`\n")
+	sb.WriteString("4. Add missing tasks: `foundry kanban add \"title\" -p high -s todo -d \"description\"`\n")
+	sb.WriteString("5. Update priorities if needed: `foundry kanban edit <id> -p critical`\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
-	sb.WriteString("When finished planning, output: <promise>PLANNER_DONE</promise>\n")
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen finished planning, output: <promise>%s</promise>\n", leader.PromisePlanner))
 
 	return sb.String()
 }
@@ -571,24 +779,39 @@ func buildPlannerPrompt(board *kanban.Board, workDir string) string {
 func buildMergePrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a MERGE COORDINATOR. All tasks are complete.\n\n")
-	sb.WriteString("## Completed Tasks\n\n")
+	sb.WriteString("You are a MERGE COORDINATOR for the Forge supervisor. All tasks are complete and ready for merge.\n\n")
 
+	sb.WriteString("## Completed Tasks\n\n")
+	doneCount := 0
 	for _, col := range board.Columns {
 		if col.Status == kanban.StatusDone {
 			for _, issue := range col.Issues {
 				sb.WriteString(fmt.Sprintf("- %s: %s\n", issue.ID[:8], issue.Title))
+				doneCount++
 			}
 		}
 	}
+	if doneCount == 0 {
+		sb.WriteString("(no completed tasks)\n")
+	}
 
-	sb.WriteString("\n## Your Tasks\n\n")
-	sb.WriteString("1. Review all changes with `git status` and `git diff`\n")
-	sb.WriteString("2. Create a commit with all changes: `git add . && git commit -m \"...\"`\n")
-	sb.WriteString("3. Verify the commit looks correct\n\n")
+	sb.WriteString("\n## Pre-Merge Checklist\n\n")
+	sb.WriteString("- [ ] All tests pass: `make test`\n")
+	sb.WriteString("- [ ] No linting errors: `make lint`\n")
+	sb.WriteString("- [ ] Code is properly formatted: `make fmt`\n")
+	sb.WriteString("- [ ] No merge conflicts\n\n")
 
-	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
-	sb.WriteString("When finished, output: <promise>MERGE_DONE</promise>\n")
+	sb.WriteString("## Your Tasks\n\n")
+	sb.WriteString("1. Check handoffs: `search_memory_facts({ query: \"forge-handoff TO: merge\" })`\n")
+	sb.WriteString("2. Review all changes: `git status` and `git diff`\n")
+	sb.WriteString("3. Run tests to verify everything works\n")
+	sb.WriteString("4. Stage and commit: `git add . && git commit -m \"...\"`\n")
+	sb.WriteString("5. Verify the commit looks correct: `git log -1 --stat`\n\n")
+
+	sb.WriteString(leader.SequentialThinkingTriggers)
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen finished, output: <promise>%s</promise>\n", leader.PromiseMerge))
 
 	return sb.String()
 }
@@ -596,14 +819,29 @@ func buildMergePrompt(board *kanban.Board, workDir string) string {
 func buildDeployPrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a DEPLOYMENT COORDINATOR. Code is merged and ready.\n\n")
-	sb.WriteString("## Your Tasks\n\n")
-	sb.WriteString("1. Verify the application works: open index.html in browser or start a server\n")
-	sb.WriteString("2. Run any tests if they exist\n")
-	sb.WriteString("3. Document what was built in a brief summary\n\n")
+	sb.WriteString("You are a DEPLOYMENT COORDINATOR for the Forge supervisor. Code is merged and ready for verification.\n\n")
 
-	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
-	sb.WriteString("When finished, output: <promise>DEPLOY_DONE</promise>\n")
+	sb.WriteString("## Smoke Test Checklist\n\n")
+	sb.WriteString("- [ ] Application starts successfully\n")
+	sb.WriteString("- [ ] Core functionality works\n")
+	sb.WriteString("- [ ] No obvious errors in console/logs\n")
+	sb.WriteString("- [ ] Tests pass: `make test`\n\n")
+
+	sb.WriteString("## Your Tasks\n\n")
+	sb.WriteString("1. Check handoffs: `search_memory_facts({ query: \"forge-handoff TO: deploy\" })`\n")
+	sb.WriteString("2. Verify build: `make build` or equivalent\n")
+	sb.WriteString("3. Run smoke tests:\n")
+	sb.WriteString("   - If web app: open in browser, check console for errors\n")
+	sb.WriteString("   - If CLI: run basic commands\n")
+	sb.WriteString("   - If library: run test suite\n")
+	sb.WriteString("4. Document what was built in a summary\n")
+	sb.WriteString("5. Tag the release if applicable: `git tag -a v<version> -m \"Release\"`\n\n")
+
+	sb.WriteString(leader.SequentialThinkingTriggers)
+	sb.WriteString(leader.ErrorHandlingGuidance)
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen finished, output: <promise>%s</promise>\n", leader.PromiseDeploy))
 
 	return sb.String()
 }
@@ -620,6 +858,70 @@ func buildTaskPrompt(task *kanban.Issue) string {
 	}
 
 	return prompt
+}
+
+func buildTaskAnalyzerPrompt(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are a TASK ANALYZER for the Forge supervisor. Your job is to review work and determine if tasks are stuck or new tasks are needed.\n\n")
+
+	sb.WriteString("## Current Board State\n\n")
+	for _, col := range board.Columns {
+		sb.WriteString(fmt.Sprintf("### %s (%d)\n", col.Status, len(col.Issues)))
+		for _, issue := range col.Issues {
+			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
+			if issue.Description != "" {
+				sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("## Your Analysis Tasks\n\n")
+	sb.WriteString("1. **Check for stuck tasks** in 'in_progress':\n")
+	sb.WriteString("   - Look for worker blockers: `search_memory_facts({ query: \"blocker:worker\" })`\n")
+	sb.WriteString("   - Check git for activity: `git log --oneline -10`\n")
+	sb.WriteString("   - If task has no recent progress, consider requeuing\n\n")
+
+	sb.WriteString("2. **Review completed tasks** in 'done':\n")
+	sb.WriteString("   - Check if the work is truly complete\n")
+	sb.WriteString("   - Look for follow-up tasks that should be created\n")
+	sb.WriteString("   - Check if the task revealed new requirements\n\n")
+
+	sb.WriteString("3. **Check for orphaned/incomplete work**:\n")
+	sb.WriteString("   - Use `git status` and `git diff` to see uncommitted changes\n")
+	sb.WriteString("   - Check for TODO comments: `grep -r 'TODO\\|FIXME' . --include='*.go'`\n")
+	sb.WriteString("   - Look for incomplete features or missing tests\n\n")
+
+	sb.WriteString("4. **Requeue stuck tasks**:\n")
+	sb.WriteString("   - Move back to todo: `foundry kanban move <id> todo`\n")
+	sb.WriteString("   - Add note explaining why: `foundry kanban edit <id> -d \"Requeued: <reason>\"`\n\n")
+
+	sb.WriteString("5. **Create new tasks if needed**:\n")
+	sb.WriteString("   - Follow-up work: `foundry kanban add \"title\" -d \"description\" -p medium -s todo`\n")
+	sb.WriteString("   - Bugs found: `foundry kanban add \"Fix: issue\" -p high -s todo`\n")
+	sb.WriteString("   - Refactoring: `foundry kanban add \"Refactor: area\" -p low -s backlog`\n\n")
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
+
+	sb.WriteString("## Output Format\n\n")
+	sb.WriteString("Structure your findings as follows:\n\n")
+	sb.WriteString("```json\n")
+	sb.WriteString("{\n")
+	sb.WriteString("  \"requeued\": [\n")
+	sb.WriteString("    {\"id\": \"abc123\", \"reason\": \"No progress in 30 minutes\"}\n")
+	sb.WriteString("  ],\n")
+	sb.WriteString("  \"created\": [\n")
+	sb.WriteString("    {\"title\": \"Fix: ...\", \"priority\": \"high\"}\n")
+	sb.WriteString("  ],\n")
+	sb.WriteString("  \"health\": \"green|yellow|red\",\n")
+	sb.WriteString("  \"summary\": \"Brief text summary\"\n")
+	sb.WriteString("}\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString(fmt.Sprintf("When finished, output: <promise>%s</promise>\n", leader.PromiseAnalyzer))
+
+	return sb.String()
 }
 
 func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorState) {
@@ -663,6 +965,9 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 	if state.deploy.running {
 		activeLeaders = append(activeLeaders, "🚀deploy")
 	}
+	if state.analyzer.running {
+		activeLeaders = append(activeLeaders, "🔬analyzer")
+	}
 
 	if len(activeLeaders) > 0 {
 		fmt.Printf("👔 Leaders: %s\n", strings.Join(activeLeaders, ", "))
@@ -681,13 +986,8 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 }
 
 func getKanbanStoreForDir(dir string) (*kanban.Store, error) {
-	foundryDir := filepath.Join(dir, ".foundry")
-	if err := os.MkdirAll(foundryDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating .foundry directory: %w", err)
-	}
-
-	dbPath := filepath.Join(foundryDir, "kanban.db")
-	return kanban.NewStore(dbPath)
+	// Store wraps bd CLI which looks for .beads/ in the working directory
+	return kanban.NewStore(dir)
 }
 
 func buildNudgeMessage(w *worker.Worker, pokeCount int) string {

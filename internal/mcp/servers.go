@@ -14,8 +14,8 @@ func DefaultServers() map[string]Server {
 	return map[string]Server{
 		"graphiti": {
 			Type:    "stdio",
-			Command: "uvx",
-			Args:    []string{"graphiti-mcp"},
+			Command: "npx",
+			Args:    []string{"-y", "mcp-remote", "http://localhost:51847/mcp/"},
 		},
 		"context7": {
 			Type:    "stdio",

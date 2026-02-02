@@ -16,11 +16,25 @@ foundry supervisor --interval 30s     # Faster polling
 foundry supervisor --leaders          # Enable all leader agents
 foundry supervisor --no-auto-assign   # Only monitor, don't assign
 foundry supervisor -d /path           # Custom working directory
+
+# Task analysis and requeue
+foundry supervisor --auto-requeue     # Auto-requeue stuck tasks
+foundry supervisor --analyze-interval 10m  # Task analysis interval
+foundry supervisor --stuck 30m        # Stuck task threshold
 ```
 
 Workflow: `todo` → `in_progress` → `review` → `done` → merge → deploy
 
-### Local Tools
+Features:
+- Assigns idle workers to todo tasks
+- Pokes active workers periodically
+- Analyzes stuck tasks and requeues them (--auto-requeue)
+- Launches leaders based on workflow state
+
+### Kanban (View on Beads)
+
+Kanban is a frontend view on top of the beads issue tracker (bd CLI).
+Issues are stored in `.beads/` and managed by the `bd` command.
 
 ```bash
 foundry kanban              # View kanban board (aliases: kb, issues, i)
@@ -29,6 +43,12 @@ foundry kanban move <id> t  # Move issue (shortcuts: b=backlog, t=todo, p=progre
 foundry kanban show <id>    # Show issue details
 foundry kanban edit <id>    # Edit issue
 foundry kanban delete <id>  # Delete issue (requires --force)
+
+# Or use bd directly:
+bd list                     # List all issues
+bd create "title"           # Create issue
+bd update <id> -s in_progress  # Update status
+bd close <id>               # Close issue
 ```
 
 ### Worker Management
@@ -59,6 +79,17 @@ foundry merge      # Merge leader (single-threaded, locked)
 foundry deploy     # Deploy leader (single-threaded, locked)
 ```
 
+### Shutdown (Stop All Agents)
+
+```bash
+foundry shutdown              # Graceful shutdown of all agents
+foundry shutdown --force      # Force kill all sessions
+foundry stop-all              # Alias
+foundry killall               # Alias
+```
+
+Stops: foundry workers, forge sessions, leaders, board sync, orphaned tmux sessions.
+
 ### External Board Sync
 
 ```bash
@@ -78,7 +109,7 @@ foundry work start "feature"    # Start feature worktree
 
 | File | Purpose |
 |------|---------|
-| `.foundry/kanban.db` | SQLite issue database |
+| `.beads/` | Beads issue database (used by kanban) |
 | `.foundry/workspace.yaml` | Workspace configuration |
 | `~/.forge/workers/registry.yaml` | Worker registry |
 | `~/.forge/workers/locks/*.lock` | Resource locks (merge/deploy) |
@@ -121,7 +152,7 @@ cmd := exec.Command("forge", "start", prompt)
 ### Pattern: Kanban Store
 
 ```go
-store, err := getKanbanStore()  // Uses .foundry/kanban.db
+store, err := getKanbanStore()  // Wraps bd CLI, uses .beads/
 if err != nil {
     return err
 }
@@ -168,7 +199,17 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
     if cfg.withLeaders {
         runLeaderWorkflow(store, reg, state, cfg.workDir)
     }
+
+    // 6. Analyze and requeue stuck tasks (if enabled)
+    if cfg.autoRequeue && time.Since(state.lastAnalysis) > cfg.analyzeInterval {
+        analyzeAndRequeueTasks(store, reg, state, cfg)
+    }
 }
+
+// Task analysis uses Claude to:
+// - Check if stuck tasks should be requeued
+// - Suggest new tasks based on patterns
+// - Identify abandoned work
 ```
 
 ## Worker Roles

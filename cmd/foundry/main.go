@@ -17,7 +17,7 @@ func main() {
 		Long: `Foundry orchestrates development workflows on top of forge.
 
 It provides tools for:
-- Local kanban issue tracking (SQLite)
+- Local kanban issue tracking (view on beads)
 - Parallel workers with persistent identity
 - External board sync (Notion, GitHub Projects)
 - Workspace and repository management
@@ -44,6 +44,7 @@ Examples:
 		newBoardCmd(),
 		newMonitorCmd(),
 		newSupervisorCmd(),
+		newShutdownCmd(),
 		// Leaders (launch forge sessions)
 		newPlannerCmd(),
 		newReviewerCmd(),

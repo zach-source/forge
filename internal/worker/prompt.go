@@ -71,6 +71,45 @@ func TaskPrompt(w *Worker, task, description string) string {
 	sb.WriteString(description)
 	sb.WriteString("\n")
 
+	sb.WriteString(WorkingGuidelines(w))
+
+	return sb.String()
+}
+
+// WorkingGuidelines provides standard guidance for worker task execution.
+func WorkingGuidelines(w *Worker) string {
+	var sb strings.Builder
+
+	sb.WriteString("\n---\n\n")
+	sb.WriteString("## Working Guidelines\n\n")
+
+	sb.WriteString("### Available Tools\n\n")
+	sb.WriteString("- **Bash**: Git, file operations, build/test commands\n")
+	sb.WriteString("- **Read/Write/Edit**: File manipulation\n")
+	sb.WriteString("- **Graphiti MCP**: Store progress, decisions, and blockers\n")
+	sb.WriteString("- **Context7 MCP**: Look up library/framework documentation\n\n")
+
+	sb.WriteString("### Quality Standards\n\n")
+	sb.WriteString("- Run tests before marking complete\n")
+	sb.WriteString("- Commit incrementally with clear messages\n")
+	sb.WriteString("- Follow existing code patterns and conventions\n")
+	sb.WriteString("- Document non-obvious design decisions\n\n")
+
+	sb.WriteString("### If Blocked\n\n")
+	sb.WriteString(fmt.Sprintf("1. Store blocker in Graphiti with tag `blocker:worker:%s`\n", w.Name))
+	sb.WriteString("2. Document what you tried and why it failed\n")
+	sb.WriteString("3. Create an issue if it requires human intervention\n")
+	sb.WriteString("4. Output your completion promise to allow supervisor to reassign\n\n")
+
+	sb.WriteString("### Before Completing\n\n")
+	sb.WriteString("Store a handoff summary for the next agent:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("add_memory({\n")
+	sb.WriteString("  group_id: \"forge-handoff\",\n")
+	sb.WriteString(fmt.Sprintf("  content: \"FROM: worker:%s\\nTO: reviewer\\nTASK: [task-id]\\nSUMMARY: [what you did]\\nFILES_CHANGED: [list]\\nCONCERNS: [any issues for reviewer]\\nCOMMIT: [hash]\"\n", w.Name))
+	sb.WriteString("})\n")
+	sb.WriteString("```\n")
+
 	return sb.String()
 }
 

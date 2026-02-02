@@ -1,6 +1,6 @@
 ---
 name: foundry:kanban
-description: Local kanban issue tracker with SQLite. Use when tracking tasks, managing issues, or viewing project board.
+description: Kanban view on beads issue tracker. Use when tracking tasks, managing issues, or viewing project board.
 triggers:
   - "kanban"
   - "add issue"
@@ -9,9 +9,10 @@ triggers:
   - "move issue"
 ---
 
-# Foundry Kanban - Local Issue Tracker
+# Foundry Kanban - View on Beads
 
-SQLite-based issue tracker stored in `.foundry/kanban.db`.
+Kanban-style frontend on top of the beads issue tracker (bd CLI).
+Issues are stored in `.beads/` and can be managed with either `foundry kanban` or `bd` directly.
 
 ## Commands
 
@@ -23,6 +24,12 @@ foundry kanban show <id>    # Show details
 foundry kanban move <id> <status>
 foundry kanban edit <id>
 foundry kanban delete <id>
+
+# Or use bd directly:
+bd list                     # List all issues
+bd create "title"           # Create issue
+bd update <id> -s in_progress
+bd close <id>               # Mark done
 ```
 
 ## Add Options
@@ -46,6 +53,16 @@ foundry kanban move abc123 r   # → review
 foundry kanban move abc123 d   # → done
 ```
 
+## Status Mapping (Kanban ↔ Beads)
+
+| Kanban Status | Beads Status |
+|---------------|--------------|
+| backlog       | open         |
+| todo          | open         |
+| in_progress   | in_progress  |
+| review        | in_progress  |
+| done          | closed       |
+
 ## Aliases
 
 ```bash
@@ -53,7 +70,3 @@ foundry kb          # kanban
 foundry issues      # kanban
 foundry i           # kanban
 ```
-
-## Issue IDs
-
-Short 8-character hex IDs (e.g., `abc12345`).

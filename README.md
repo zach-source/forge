@@ -21,7 +21,7 @@ This repository contains two complementary CLI tools:
         ▼                       ▼                       ▼
 ┌───────────────┐      ┌───────────────┐      ┌───────────────┐
 │    WORKERS    │      │    LEADERS    │      │    KANBAN     │
-│ alpha, bravo  │      │ planner       │      │ SQLite-based  │
+│ alpha, bravo  │      │ planner       │      │ View on beads │
 │ charlie, ...  │      │ reviewer      │      │ issue tracker │
 │ (NATO names)  │      │ merge, deploy │      │               │
 └───────┬───────┘      └───────┬───────┘      └───────────────┘
@@ -84,7 +84,7 @@ Foundry provides higher-level development automation.
 
 ### Local Kanban
 
-SQLite-based issue tracker:
+View on beads issue tracker (`.beads/` via `bd` CLI):
 
 ```bash
 foundry kanban                      # View board
@@ -108,9 +108,21 @@ foundry supervisor --leaders
 
 # Full autonomous workflow
 foundry supervisor --interval 1m --leaders
+
+# Task analysis and automatic requeue of stuck tasks
+foundry supervisor --auto-requeue --stuck 30m
+
+# Custom analysis interval
+foundry supervisor --analyze-interval 10m --auto-requeue
 ```
 
 Workflow: `todo` → `in_progress` (worker) → `review` (reviewer) → `done` → merge → deploy
+
+Features:
+- Assigns idle workers to todo tasks
+- Pokes active workers periodically
+- Analyzes stuck tasks and requeues them
+- Launches leaders based on workflow state
 
 ### Parallel Workers
 
@@ -167,6 +179,19 @@ foundry reviewer    # Code review, issue creation
 foundry merge       # PR merge coordination (single-threaded)
 foundry deploy      # Deployment and smoke testing
 ```
+
+### Shutdown
+
+Stop all running agents and sessions:
+
+```bash
+foundry shutdown              # Graceful shutdown of all agents
+foundry shutdown --force      # Force kill all sessions
+foundry stop-all              # Alias
+foundry killall               # Alias
+```
+
+Stops: workers, forge sessions, leaders, board sync, orphaned tmux sessions.
 
 ### Workspace Management
 
@@ -241,7 +266,7 @@ export GITHUB_TOKEN=ghp_xxx          # GitHub Projects
 | `~/.forge/sessions/*.state.md` | Session state files |
 | `~/.forge/workers/registry.yaml` | Worker registry |
 | `~/.forge/workers/locks/*.lock` | Resource locks (merge/deploy) |
-| `.foundry/kanban.db` | Local issue database |
+| `.beads/` | Issue database (used by kanban) |
 | `.foundry/workspace.yaml` | Workspace config |
 
 ## Development
@@ -274,6 +299,7 @@ cmd/
     ├── worker.go       # Parallel workers
     ├── board.go        # Board sync
     ├── monitor.go      # TUI dashboard
+    ├── shutdown.go     # Stop all agents
     ├── planner.go      # Planning leader
     ├── reviewer.go     # Review leader
     ├── merge.go        # Merge leader
@@ -291,7 +317,7 @@ internal/
 │   ├── prompt.go       # Identity injection
 │   ├── lock.go         # Resource locks (merge/deploy)
 │   └── names.go        # NATO alphabet generation
-├── kanban/             # SQLite issue tracker
+├── kanban/             # Beads wrapper (bd CLI)
 ├── board/              # Board providers
 ├── leader/             # Leader prompts
 ├── workspace/          # Workspace ops

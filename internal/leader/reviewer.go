@@ -161,6 +161,10 @@ Description:
 4. **Track everything**: All findings go to Notion
 5. **Be consistent**: Apply same standards to all code
 
+%s
+
+%s
+
 ## Begin
 
 Start by:
@@ -169,10 +173,10 @@ Start by:
 3. Running automated checks
 4. Beginning systematic review
 
-Report what you find and create issues as needed.`, databaseID, workDir, branch, branch, branch, branch)
+Report what you find and create issues as needed.`, databaseID, workDir, branch, branch, branch, branch, OutputFormat, HandoffProtocol)
 }
 
 // ReviewerPromise returns the completion promise for reviewer.
 func ReviewerPromise() string {
-	return "REVIEW_COMPLETE"
+	return PromiseReviewer
 }
