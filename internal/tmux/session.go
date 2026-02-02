@@ -316,6 +316,33 @@ func isShellPrompt(line string) bool {
 	return false
 }
 
+// IsClaudeRunning checks if Claude appears to be running in the session.
+// Returns false if the session shows a shell prompt (indicating Claude has exited).
+func (s *Session) IsClaudeRunning() bool {
+	if !s.Exists() {
+		return false
+	}
+
+	lines, err := s.CapturePaneLines(10)
+	if err != nil {
+		return true // Assume running if we can't check
+	}
+
+	// Check last few non-empty lines for shell prompt
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if isShellPrompt(line) {
+			return false // Shell prompt visible, Claude has exited
+		}
+		break // Found non-empty, non-prompt line
+	}
+
+	return true
+}
+
 // shellQuote quotes a string for safe shell usage.
 func shellQuote(s string) string {
 	// Use single quotes and escape any single quotes in the string

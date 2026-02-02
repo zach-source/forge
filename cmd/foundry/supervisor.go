@@ -149,8 +149,8 @@ func newSupervisorState() *supervisorState {
 	}
 }
 
-// checkWorkerHealth verifies all workers marked Active have existing tmux sessions.
-// Stale workers (session gone) are reset and any associated leader state is cleared.
+// checkWorkerHealth verifies all workers marked Active have existing tmux sessions
+// with Claude actually running. Stale workers are reset and leader state is cleared.
 func checkWorkerHealth(reg *worker.Registry, state *supervisorState) {
 	workers := reg.List(worker.StatusActive)
 
@@ -160,8 +160,19 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState) {
 		}
 
 		session := tmux.NewSession(w.SessionID, "", "")
-		if !session.Exists() {
-			fmt.Printf("🔄 Resetting stale worker %s (session gone)\n", w.DisplayName())
+		sessionExists := session.Exists()
+		claudeRunning := sessionExists && session.IsClaudeRunning()
+
+		// Determine reason for reset
+		var reason string
+		if !sessionExists {
+			reason = "session gone"
+		} else if !claudeRunning {
+			reason = "Claude exited"
+		}
+
+		if reason != "" {
+			fmt.Printf("🔄 Resetting stale worker %s (%s)\n", w.DisplayName(), reason)
 
 			// Stop and reset the worker
 			if err := worker.Stop(reg, w.ID); err != nil {
@@ -246,14 +257,21 @@ func syncLeaderStateFromRegistry(reg *worker.Registry, state *supervisorState) {
 
 // cleanupOrphanedSessions finds tmux sessions with forge- prefix not in registry.
 func cleanupOrphanedSessions(reg *worker.Registry, dryRun bool) {
-	// Get all forge-related tmux sessions
-	sessions, err := tmux.ListSessions("forge-")
-	if err != nil {
-		fmt.Printf("⚠️  Error listing tmux sessions: %v\n", err)
-		return
+	// Prefixes for forge-related tmux sessions (including legacy naming)
+	prefixes := []string{"forge-", "mforge-", "mf-"}
+
+	// Collect all sessions matching any prefix
+	var allSessions []string
+	for _, prefix := range prefixes {
+		sessions, err := tmux.ListSessions(prefix)
+		if err != nil {
+			fmt.Printf("⚠️  Error listing tmux sessions with prefix %s: %v\n", prefix, err)
+			continue
+		}
+		allSessions = append(allSessions, sessions...)
 	}
 
-	if len(sessions) == 0 {
+	if len(allSessions) == 0 {
 		return
 	}
 
@@ -267,7 +285,7 @@ func cleanupOrphanedSessions(reg *worker.Registry, dryRun bool) {
 
 	// Find and cleanup orphaned sessions
 	orphanCount := 0
-	for _, sessionID := range sessions {
+	for _, sessionID := range allSessions {
 		if !knownSessions[sessionID] {
 			orphanCount++
 			if dryRun {
@@ -456,10 +474,15 @@ func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *su
 		return
 	}
 
+	// Build maps for quick lookup
 	activeWorkers := reg.List(worker.StatusActive)
 	activeWorkerIDs := make(map[string]bool)
+	workerTaskMap := make(map[string]string) // task ID -> worker ID from registry
 	for _, w := range activeWorkers {
 		activeWorkerIDs[w.ID] = true
+		if w.CurrentTask != "" {
+			workerTaskMap[w.CurrentTask] = w.ID
+		}
 	}
 
 	for _, task := range inProgressTasks {
@@ -468,8 +491,17 @@ func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *su
 			state.taskStarted[task.ID] = time.Now()
 		}
 
-		// Check if this task has an active worker
+		// Check if this task has an active worker (from in-memory state OR registry)
 		assignedWorker := state.taskWorkers[task.ID]
+		if assignedWorker == "" {
+			// Check registry for worker claiming this task
+			assignedWorker = workerTaskMap[task.ID]
+			if assignedWorker != "" {
+				// Restore in-memory state from registry
+				state.taskWorkers[task.ID] = assignedWorker
+				state.workerTasks[assignedWorker] = task.ID
+			}
+		}
 		hasActiveWorker := assignedWorker != "" && activeWorkerIDs[assignedWorker]
 
 		if !hasActiveWorker {
@@ -1171,8 +1203,9 @@ func buildNudgeMessage(w *worker.Worker, pokeCount int) string {
 		urgency = "URGENT: Please complete immediately and output your promise."
 	}
 
+	// Use printf to avoid zsh extended glob issues with (#N) pattern
 	return fmt.Sprintf(
-		"echo '🔔 Supervisor (#%d): %s'",
+		"printf '%%s\\n' '🔔 Supervisor %d: %s'",
 		pokeCount,
 		urgency,
 	)
