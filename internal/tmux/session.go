@@ -328,8 +328,9 @@ func IsTmuxInstalled() bool {
 	return err == nil
 }
 
-// ListForgeSessions returns all tmux sessions matching the forge pattern.
-func ListForgeSessions() ([]string, error) {
+// ListSessions returns all tmux session names matching a prefix.
+// If prefix is empty, returns all sessions.
+func ListSessions(prefix string) ([]string, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -343,11 +344,16 @@ func ListForgeSessions() ([]string, error) {
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
 		name := scanner.Text()
-		if strings.HasPrefix(name, "forge-") {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
 			sessions = append(sessions, name)
 		}
 	}
 	return sessions, nil
+}
+
+// ListForgeSessions returns all tmux sessions matching the forge pattern.
+func ListForgeSessions() ([]string, error) {
+	return ListSessions("forge-")
 }
 
 // GetSessionInfo returns information about a tmux session.

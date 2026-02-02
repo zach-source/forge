@@ -26,6 +26,8 @@ func newSupervisorCmd() *cobra.Command {
 		autoAssign      bool
 		withLeaders     bool
 		autoRequeue     bool
+		cleanupOrphans  bool
+		dryRun          bool
 	)
 
 	cmd := &cobra.Command{
@@ -72,6 +74,8 @@ Examples:
 				autoAssign:      autoAssign,
 				withLeaders:     withLeaders,
 				autoRequeue:     autoRequeue,
+				cleanupOrphans:  cleanupOrphans,
+				dryRun:          dryRun,
 			})
 		},
 	}
@@ -84,6 +88,8 @@ Examples:
 	cmd.Flags().BoolVar(&autoAssign, "auto-assign", true, "Automatically assign tasks to idle workers")
 	cmd.Flags().BoolVar(&withLeaders, "leaders", false, "Enable all leader agents (planner, reviewer, merge, deploy)")
 	cmd.Flags().BoolVar(&autoRequeue, "auto-requeue", true, "Automatically requeue stuck tasks")
+	cmd.Flags().BoolVar(&cleanupOrphans, "cleanup-orphans", false, "Clean up orphaned tmux sessions on startup")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be cleaned without taking action")
 
 	return cmd
 }
@@ -97,6 +103,8 @@ type supervisorConfig struct {
 	autoAssign      bool
 	withLeaders     bool
 	autoRequeue     bool
+	cleanupOrphans  bool
+	dryRun          bool
 }
 
 type leaderState struct {
@@ -141,6 +149,148 @@ func newSupervisorState() *supervisorState {
 	}
 }
 
+// checkWorkerHealth verifies all workers marked Active have existing tmux sessions.
+// Stale workers (session gone) are reset and any associated leader state is cleared.
+func checkWorkerHealth(reg *worker.Registry, state *supervisorState) {
+	workers := reg.List(worker.StatusActive)
+
+	for _, w := range workers {
+		if w.SessionID == "" {
+			continue
+		}
+
+		session := tmux.NewSession(w.SessionID, "", "")
+		if !session.Exists() {
+			fmt.Printf("🔄 Resetting stale worker %s (session gone)\n", w.DisplayName())
+
+			// Stop and reset the worker
+			if err := worker.Stop(reg, w.ID); err != nil {
+				fmt.Printf("   ⚠️  Error stopping worker: %v\n", err)
+			}
+			if err := worker.Reset(reg, w.ID); err != nil {
+				fmt.Printf("   ⚠️  Error resetting worker: %v\n", err)
+			}
+
+			// Clear any leader state if this was a leader
+			clearLeaderState(w.Role, state)
+
+			// Clear task tracking state
+			if w.CurrentTask != "" {
+				delete(state.taskWorkers, w.CurrentTask)
+			}
+			delete(state.workerTasks, w.ID)
+			delete(state.pokeCounts, w.ID)
+		}
+	}
+}
+
+// clearLeaderState clears the in-memory leader state for a given role.
+func clearLeaderState(role worker.Role, state *supervisorState) {
+	switch role {
+	case worker.RolePlanner:
+		state.planner.running = false
+		state.planner.sessionID = ""
+	case worker.RoleReviewer:
+		state.reviewer.running = false
+		state.reviewer.sessionID = ""
+	case worker.RoleMerge:
+		state.merge.running = false
+		state.merge.sessionID = ""
+	case worker.RoleDeploy:
+		state.deploy.running = false
+		state.deploy.sessionID = ""
+	}
+}
+
+// syncLeaderStateFromRegistry initializes leaderState from registry on startup.
+// This restores state for leaders that were running before supervisor restart.
+func syncLeaderStateFromRegistry(reg *worker.Registry, state *supervisorState) {
+	workers := reg.List(worker.StatusActive)
+
+	for _, w := range workers {
+		if w.SessionID == "" {
+			continue
+		}
+
+		// Check if session actually exists
+		session := tmux.NewSession(w.SessionID, "", "")
+		if !session.Exists() {
+			continue // Will be cleaned up by health check
+		}
+
+		// Restore leader state
+		switch w.Role {
+		case worker.RolePlanner:
+			state.planner.running = true
+			state.planner.sessionID = w.SessionID
+			state.planner.startedAt = w.LastActive
+			fmt.Printf("📋 Restored planner state from %s\n", w.DisplayName())
+		case worker.RoleReviewer:
+			state.reviewer.running = true
+			state.reviewer.sessionID = w.SessionID
+			state.reviewer.startedAt = w.LastActive
+			fmt.Printf("🔍 Restored reviewer state from %s\n", w.DisplayName())
+		case worker.RoleMerge:
+			state.merge.running = true
+			state.merge.sessionID = w.SessionID
+			state.merge.startedAt = w.LastActive
+			fmt.Printf("🔀 Restored merge state from %s\n", w.DisplayName())
+		case worker.RoleDeploy:
+			state.deploy.running = true
+			state.deploy.sessionID = w.SessionID
+			state.deploy.startedAt = w.LastActive
+			fmt.Printf("🚀 Restored deploy state from %s\n", w.DisplayName())
+		}
+	}
+}
+
+// cleanupOrphanedSessions finds tmux sessions with forge- prefix not in registry.
+func cleanupOrphanedSessions(reg *worker.Registry, dryRun bool) {
+	// Get all forge-related tmux sessions
+	sessions, err := tmux.ListSessions("forge-")
+	if err != nil {
+		fmt.Printf("⚠️  Error listing tmux sessions: %v\n", err)
+		return
+	}
+
+	if len(sessions) == 0 {
+		return
+	}
+
+	// Build set of known session IDs from registry
+	knownSessions := make(map[string]bool)
+	for _, w := range reg.List() {
+		if w.SessionID != "" {
+			knownSessions[w.SessionID] = true
+		}
+	}
+
+	// Find and cleanup orphaned sessions
+	orphanCount := 0
+	for _, sessionID := range sessions {
+		if !knownSessions[sessionID] {
+			orphanCount++
+			if dryRun {
+				fmt.Printf("🗑️  Would cleanup orphan: %s\n", sessionID)
+			} else {
+				fmt.Printf("🗑️  Cleaning up orphan: %s\n", sessionID)
+				session := tmux.NewSession(sessionID, "", "")
+				if err := session.Kill(); err != nil {
+					fmt.Printf("   ⚠️  Error killing session: %v\n", err)
+				}
+			}
+		}
+	}
+
+	if orphanCount == 0 {
+		fmt.Println("✅ No orphaned sessions found")
+	} else if dryRun {
+		fmt.Printf("📊 Found %d orphaned session(s) (dry-run, no action taken)\n", orphanCount)
+	} else {
+		fmt.Printf("📊 Cleaned up %d orphaned session(s)\n", orphanCount)
+	}
+}
+
 func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	fmt.Printf("🎯 Supervisor starting\n")
 	fmt.Printf("   Interval: %s\n", cfg.interval)
@@ -162,6 +312,22 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	}()
 
 	state := newSupervisorState()
+
+	// Load registry for startup initialization
+	reg, err := worker.LoadRegistry()
+	if err != nil {
+		fmt.Printf("⚠️  Error loading workers for startup: %v\n", err)
+	} else {
+		// Sync leader state from registry (recovers state after restart)
+		fmt.Println("🔄 Checking for running leaders...")
+		syncLeaderStateFromRegistry(reg, state)
+
+		// Optional cleanup of orphaned sessions
+		if cfg.cleanupOrphans {
+			fmt.Println("🧹 Checking for orphaned sessions...")
+			cleanupOrphanedSessions(reg, cfg.dryRun)
+		}
+	}
 
 	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
@@ -197,6 +363,9 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 		fmt.Printf("⚠️  Error loading workers: %v\n", err)
 		return
 	}
+
+	// 0. Health check - detect stale workers with missing tmux sessions
+	checkWorkerHealth(reg, state)
 
 	// 1. Check for completed workers and update tasks
 	checkCompletedWorkers(store, reg, state)
