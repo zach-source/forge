@@ -121,11 +121,15 @@ func runLogsList(filterType string, showAll bool) error {
 
 func runLogsView(sessionID string, tailLines int) error {
 	// Try to find the log file
-	paths := []string{
-		logs.SessionLogPath(sessionID),
-		logs.WorkerLogPath(sessionID),
-		logs.LeaderLogPath(sessionID),
+	var paths []string
+
+	// SessionLogPath returns (string, error)
+	if sessionPath, err := logs.SessionLogPath(sessionID); err == nil {
+		paths = append(paths, sessionPath)
 	}
+	// WorkerLogPath and LeaderLogPath return just string
+	paths = append(paths, logs.WorkerLogPath(sessionID))
+	paths = append(paths, logs.LeaderLogPath(sessionID))
 
 	var logPath string
 	for _, p := range paths {
