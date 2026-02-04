@@ -116,28 +116,40 @@ make smoke-test
 - [ ] Database connectivity
 - [ ] External service integrations
 
-### Phase 5: Post-Deployment
+### Phase 5: Post-Deployment (REQUIRED)
 
-**If deployment succeeds**:
+**After successful verification, you MUST create a release**:
 
-1. **Update Notion**:
-   - Mark deployed features as "Done"
-   - Add deployment timestamp and version
+1. **Determine version** (check existing tags):
+   `+"```bash"+`
+   git tag --sort=-version:refname | head -5
+   # Increment appropriately: v0.1.0 -> v0.1.1 (patch) or v0.2.0 (minor)
+   `+"```"+`
 
-2. **Update beads**:
-   `+"`bd complete <bead-id>`"+`
+2. **Create and push tag**:
+   `+"```bash"+`
+   VERSION="v0.1.x"  # Set appropriate version
+   git tag -a $VERSION -m "Release $VERSION - <brief summary of changes>"
+   git push origin $VERSION
+   `+"```"+`
 
-3. **Record in Graphiti**:
+3. **Create GitHub release** (REQUIRED):
+   `+"```bash"+`
+   gh release create $VERSION --title "$VERSION - <title>" --notes "## Changes
+   - Feature 1
+   - Feature 2
+   - Bug fix 1
+   "
+   `+"```"+`
+
+4. **Record in Graphiti**:
    `+"`"+`add_memory({
-     content: "Deployed to %s: version <sha>, features: ...",
+     content: "Released %s: version $VERSION, features: ...",
      group_id: "forge-deploy"
    })`+"`"+`
 
-4. **Tag the release**:
-   `+"```bash"+`
-   git tag -a v$(date +%%Y%%m%%d)-$(git rev-parse --short HEAD) -m "Release to %s"
-   git push origin --tags
-   `+"```"+`
+5. **Update beads** (mark deployed tasks):
+   `+"`bd complete <bead-id>`"+`
 
 **If deployment fails**:
 
@@ -275,7 +287,7 @@ Start by:
 4. Reporting deployment readiness
 
 Then wait for deployment instructions.`, environment, dryRunNote, databaseID, workDir, environment,
-		environment, environment, environment, environment, environment,
+		environment, environment, environment, environment,
 		OutputFormat, HandoffProtocol, SequentialThinkingTriggers)
 }
 
