@@ -202,14 +202,14 @@ func TestListSessionStateFiles(t *testing.T) {
 	// Create temp dir and set it as the sessions dir
 	tmpDir := t.TempDir()
 	sessionsDir := filepath.Join(tmpDir, ".forge", "sessions")
-	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create some state files
 	files := []string{"session1.state.md", "session2.state.md", "notastate.txt"}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(sessionsDir, f), []byte("test"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(sessionsDir, f), []byte("test"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

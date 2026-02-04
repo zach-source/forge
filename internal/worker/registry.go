@@ -74,7 +74,7 @@ func (r *Registry) Save() error {
 func (r *Registry) saveUnlocked() error {
 	// Ensure directory exists
 	dir := filepath.Dir(r.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating registry directory: %w", err)
 	}
 
@@ -86,7 +86,7 @@ func (r *Registry) saveUnlocked() error {
 
 	// Write atomically
 	tmpPath := r.path + ".tmp"
-	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, content, 0o644); err != nil {
 		return fmt.Errorf("writing registry: %w", err)
 	}
 

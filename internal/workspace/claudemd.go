@@ -196,7 +196,7 @@ func (w *Workspace) WriteClaudeMD() error {
 	content := w.GenerateClaudeMD()
 	path := filepath.Join(w.Path, ClaudeMDFile)
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("writing CLAUDE.md: %w", err)
 	}
 

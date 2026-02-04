@@ -173,7 +173,7 @@ func readLock(path string) (*Lock, error) {
 func writeLock(path string, lock *Lock) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating locks directory: %w", err)
 	}
 
@@ -184,7 +184,7 @@ func writeLock(path string, lock *Lock) error {
 
 	// Write atomically
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return err
 	}
 

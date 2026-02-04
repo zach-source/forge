@@ -53,7 +53,7 @@ func (w *Workspace) CreateWorktree(repoName, featureName, baseBranch string) (*W
 	worktreePath := filepath.Join(w.WorktreesDir(), repoName, sanitizeBranchName(featureName))
 
 	// Ensure worktrees directory exists
-	if err := os.MkdirAll(filepath.Dir(worktreePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return nil, fmt.Errorf("creating worktrees directory: %w", err)
 	}
 
@@ -247,7 +247,7 @@ func (w *Workspace) loadWorktreeConfig() (*WorktreeConfig, error) {
 func (w *Workspace) saveWorktreeConfig(config *WorktreeConfig) error {
 	path := w.worktreeConfigPath()
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating worktrees directory: %w", err)
 	}
 
@@ -256,7 +256,7 @@ func (w *Workspace) saveWorktreeConfig(config *WorktreeConfig) error {
 		return fmt.Errorf("marshaling worktree config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("writing worktree config: %w", err)
 	}
 
