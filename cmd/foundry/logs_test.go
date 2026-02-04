@@ -27,7 +27,7 @@ func setupTestLogs(t *testing.T) (string, func()) {
 		filepath.Join(tmpDir, "leaders"),
 	}
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			os.RemoveAll(tmpDir)
 			t.Fatalf("creating dir %s: %v", dir, err)
 		}
@@ -44,7 +44,7 @@ func setupTestLogs(t *testing.T) (string, func()) {
 func createTestLog(t *testing.T, path string, content string, modTime time.Time) {
 	t.Helper()
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing test log %s: %v", path, err)
 	}
 	if !modTime.IsZero() {
@@ -259,7 +259,7 @@ func TestRunLogsViewDirectPath(t *testing.T) {
 	// Create test log
 	logPath := filepath.Join(tmpDir, "direct.log")
 	logContent := "direct log content"
-	if err := os.WriteFile(logPath, []byte(logContent), 0644); err != nil {
+	if err := os.WriteFile(logPath, []byte(logContent), 0o644); err != nil {
 		t.Fatalf("writing test log: %v", err)
 	}
 

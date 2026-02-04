@@ -21,15 +21,13 @@ const (
 	// DefaultMaxBackups is the default number of rotated log files to keep.
 	DefaultMaxBackups = 5
 	// DefaultDirPerms is the default permissions for log directories.
-	DefaultDirPerms = 0755
+	DefaultDirPerms = 0o755
 	// DefaultFilePerms is the default permissions for log files.
-	DefaultFilePerms = 0644
+	DefaultFilePerms = 0o644
 )
 
-var (
-	// ErrRotationFailed indicates that log rotation failed.
-	ErrRotationFailed = errors.New("log rotation failed")
-)
+// ErrRotationFailed indicates that log rotation failed.
+var ErrRotationFailed = errors.New("log rotation failed")
 
 // LogType represents the type of log file.
 type LogType string
