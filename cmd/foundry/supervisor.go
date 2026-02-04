@@ -938,6 +938,29 @@ func isActivelyWorking(output string) bool {
 	return false
 }
 
+// runClaudeHaiku runs a prompt through Claude Haiku in print mode.
+// Uses a temp file to safely pass the prompt without shell escaping issues.
+func runClaudeHaiku(prompt string) ([]byte, error) {
+	// Write prompt to temp file for reliable delivery
+	promptFile, err := os.CreateTemp("", "forge-haiku-*.txt")
+	if err != nil {
+		return nil, fmt.Errorf("creating prompt file: %w", err)
+	}
+	promptPath := promptFile.Name()
+	defer os.Remove(promptPath)
+
+	if _, err := promptFile.WriteString(prompt); err != nil {
+		promptFile.Close()
+		return nil, fmt.Errorf("writing prompt file: %w", err)
+	}
+	promptFile.Close()
+
+	// Run claude with prompt from file via shell
+	// Using shell to pipe file content to claude -p
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("cat %s | claude -p --model haiku", promptPath))
+	return cmd.Output()
+}
+
 // assessWithHaiku uses Claude Haiku to intelligently assess if worker needs a poke.
 func assessWithHaiku(output string, w *worker.Worker) (bool, string) {
 	// Truncate output if too long
@@ -969,9 +992,8 @@ Assess whether this worker:
 Respond with ONLY one line: either "NO_POKE: reason" or "POKE: reason"`,
 		w.DisplayName(), w.Role, w.CurrentTask, output)
 
-	// Run haiku assessment (quick, cheap model for simple yes/no decisions)
-	cmd := exec.Command("claude", "-p", prompt, "--model", "haiku")
-	out, err := cmd.Output()
+	// Run haiku assessment using shell with proper escaping
+	out, err := runClaudeHaiku(prompt)
 	if err != nil {
 		// On error, default to poking
 		return true, "assessment failed"
@@ -2139,9 +2161,8 @@ Example: [{"action": "assign_task", "worker": "alpha", "task": "abc123", "reason
 
 If no actions needed, return: [{"action": "skip", "reason": "system is healthy"}]`, statePrompt)
 
-	// Call Haiku
-	cmd := exec.Command("claude", "-p", prompt, "--model", "haiku")
-	out, err := cmd.Output()
+	// Call Haiku using shell with proper escaping
+	out, err := runClaudeHaiku(prompt)
 	if err != nil {
 		fmt.Printf("⚠️  Smart decision error: %v\n", err)
 		return nil

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -111,16 +112,30 @@ func (s *Session) RunCommand(command string) error {
 	return s.SendKeys(command)
 }
 
-// RunClaude runs a Claude command in the tmux session.
-// Uses proper shell escaping for reliable prompt injection.
+// RunClaude runs Claude in interactive mode in the tmux session.
+// Uses a temp file and stdin redirect to pass the prompt reliably.
 func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) error {
 	if !s.Exists() {
 		return ErrSessionNotFound
 	}
 
-	// Build claude command with properly escaped prompt
+	// Write prompt to temp file for reliable delivery
+	promptFile, err := os.CreateTemp("", "forge-prompt-*.txt")
+	if err != nil {
+		return fmt.Errorf("creating prompt file: %w", err)
+	}
+	promptPath := promptFile.Name()
+
+	if _, err := promptFile.WriteString(prompt); err != nil {
+		promptFile.Close()
+		os.Remove(promptPath)
+		return fmt.Errorf("writing prompt file: %w", err)
+	}
+	promptFile.Close()
+
+	// Build claude command (interactive mode, no -p flag)
 	var cmdParts []string
-	cmdParts = append(cmdParts, "claude", "-p", shellQuoteSingle(prompt))
+	cmdParts = append(cmdParts, "claude")
 
 	if skipPermissions {
 		cmdParts = append(cmdParts, "--dangerously-skip-permissions")
@@ -130,17 +145,11 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 	}
 	cmdParts = append(cmdParts, "--allowedTools", "'*'")
 
-	cmd := strings.Join(cmdParts, " ")
-	return s.SendKeys(cmd)
-}
+	// Pipe prompt from file to claude stdin, then clean up
+	// Format: cat file | claude flags; rm file
+	cmd := fmt.Sprintf("cat %s | %s; rm -f %s", promptPath, strings.Join(cmdParts, " "), promptPath)
 
-// shellQuoteSingle quotes a string for safe use in bash single quotes.
-// This handles arbitrary content including quotes, newlines, and special chars.
-// The technique: end quote, add escaped quote, restart quote for each single quote.
-func shellQuoteSingle(s string) string {
-	// Replace each ' with '\'' (end quote, literal quote, start quote)
-	escaped := strings.ReplaceAll(s, "'", "'\\''")
-	return "'" + escaped + "'"
+	return s.SendKeys(cmd)
 }
 
 // CapturePane captures the current pane content.
