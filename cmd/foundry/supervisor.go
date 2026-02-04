@@ -158,7 +158,7 @@ type supervisorState struct {
 	allTasksDone    bool
 	mergeCompleted  bool
 	deployCompleted bool
-	lastDoneCount   int // track Done count to detect new completions
+	lastMergeCount  int // track Merge queue count to detect new tasks ready for merge
 
 	// Analysis tracking
 	lastAnalysis time.Time // when we last ran the analyzer
@@ -762,7 +762,7 @@ func checkForNewTasks(store *kanban.Store, reg *worker.Registry, state *supervis
 
 	prompt := buildTaskAnalyzerPrompt(board, workDir)
 	state.lastAnalysis = time.Now()
-	startLeader(reg, analyzer, &state.analyzer, workDir, prompt, "ANALYZER_DONE")
+	startLeader(reg, analyzer, &state.analyzer, workDir, prompt, leader.PromiseAnalyzer)
 }
 
 func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
@@ -1151,6 +1151,7 @@ func assignTasks(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 }
 
 func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string) {
+	fmt.Printf("   🔄 Running leader workflow...\n")
 	board, err := store.GetBoard()
 	if err != nil {
 		return
@@ -1160,6 +1161,9 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	for _, col := range board.Columns {
 		counts[col.Status] = len(col.Issues)
 	}
+	fmt.Printf("   📊 Board counts: backlog=%d, todo=%d, wip=%d, review=%d, merge=%d, done=%d\n",
+		counts[kanban.StatusBacklog], counts[kanban.StatusTodo], counts[kanban.StatusInProgress],
+		counts[kanban.StatusReview], counts[kanban.StatusMerge], counts[kanban.StatusDone])
 
 	// Check if any worker is using the worktree
 	workerActive := false
@@ -1180,7 +1184,7 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	// 2. REVIEWER: Run when there are tasks in review (can run alongside workers)
 	if counts[kanban.StatusReview] > 0 && !state.reviewer.running {
 		startReviewer(store, reg, state, workDir, board)
-		return // One leader at a time (after groomer which runs parallel)
+		// Don't return - reviewer can run parallel with merge leader
 	}
 
 	// 3. PLANNER: Run when no work in progress and we need to plan
@@ -1191,24 +1195,28 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 		return
 	}
 
-	// 4. Check if there are done tasks to merge
+	// 4. Check if there are tasks in merge queue
+	mergeCount := counts[kanban.StatusMerge]
+	hasMergeTasks := mergeCount > 0
 	doneCount := counts[kanban.StatusDone]
-	hasDoneTasks := doneCount > 0
 	pendingWork := counts[kanban.StatusBacklog] + counts[kanban.StatusTodo] +
-		counts[kanban.StatusInProgress] + counts[kanban.StatusReview]
-	state.allTasksDone = pendingWork == 0 && hasDoneTasks
+		counts[kanban.StatusInProgress] + counts[kanban.StatusReview] + counts[kanban.StatusMerge]
+	state.allTasksDone = pendingWork == 0 && doneCount > 0
 
-	// Reset mergeCompleted if new tasks moved to Done (allows merge for new work)
-	if doneCount > state.lastDoneCount && state.mergeCompleted {
-		fmt.Printf("🔄 New tasks completed, resetting merge state\n")
+	// Reset mergeCompleted if new tasks moved to merge queue (allows merge for new work)
+	if mergeCount > state.lastMergeCount && state.mergeCompleted {
+		fmt.Printf("🔄 New tasks ready for merge, resetting merge state\n")
 		state.mergeCompleted = false
 	}
-	state.lastDoneCount = doneCount
+	state.lastMergeCount = mergeCount
 
-	// 5. MERGE: Run when there are done tasks (can run alongside workers)
-	// The merge leader will merge task branches for completed tasks
+	// 5. MERGE: Run when there are tasks in merge queue (can run alongside workers)
+	// The merge leader will merge task branches and move them to done
 	// Don't restart if merge already completed (prevents infinite loop)
-	if hasDoneTasks && !state.merge.running && !state.mergeCompleted {
+	if mergeCount > 0 {
+		fmt.Printf("   📊 Merge queue: %d tasks (running=%v, completed=%v)\n", mergeCount, state.merge.running, state.mergeCompleted)
+	}
+	if hasMergeTasks && !state.merge.running && !state.mergeCompleted {
 		startMerge(store, reg, state, workDir, board)
 		// Don't return - allow other leaders to run too
 	}
@@ -1272,7 +1280,7 @@ func startReviewer(store *kanban.Store, reg *worker.Registry, state *supervisorS
 	fmt.Printf("🔍 Starting reviewer %s\n", w.DisplayName())
 
 	prompt := buildReviewerPrompt(board, workDir)
-	startLeader(reg, w, &state.reviewer, workDir, prompt, "REVIEWER_DONE")
+	startLeader(reg, w, &state.reviewer, workDir, prompt, leader.PromiseReviewer)
 }
 
 func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
@@ -1286,7 +1294,7 @@ func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 	fmt.Printf("📋 Starting planner %s\n", w.DisplayName())
 
 	prompt := buildPlannerPrompt(board, workDir)
-	startLeader(reg, w, &state.planner, workDir, prompt, "PLANNER_DONE")
+	startLeader(reg, w, &state.planner, workDir, prompt, leader.PromisePlanner)
 }
 
 func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
@@ -1300,7 +1308,7 @@ func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorStat
 	fmt.Printf("🔀 Starting merge leader %s\n", w.DisplayName())
 
 	prompt := buildMergePrompt(board, workDir)
-	startLeader(reg, w, &state.merge, workDir, prompt, "MERGE_DONE")
+	startLeader(reg, w, &state.merge, workDir, prompt, leader.PromiseMerge)
 }
 
 func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
@@ -1314,7 +1322,7 @@ func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 	fmt.Printf("🚀 Starting deploy leader %s\n", w.DisplayName())
 
 	prompt := buildDeployPrompt(board, workDir)
-	startLeader(reg, w, &state.deploy, workDir, prompt, "DEPLOY_DONE")
+	startLeader(reg, w, &state.deploy, workDir, prompt, leader.PromiseDeploy)
 }
 
 func startGroomer(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
@@ -1377,8 +1385,9 @@ func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("   - Check branch: `git log main..task/<id> --oneline`\n")
 	sb.WriteString("   - Review changes: `git diff main..task/<id>`\n")
 	sb.WriteString("   - Run tests on the branch if needed\n")
-	sb.WriteString("4. For approved tasks: `foundry kanban move <id> done`\n")
-	sb.WriteString("5. For rejected tasks: `foundry kanban move <id> todo` and add feedback\n\n")
+	sb.WriteString("4. **APPROVED**: `foundry kanban move <id> m` (moves to merge queue)\n")
+	sb.WriteString("5. **REJECTED**: `foundry kanban move <id> t` (moves back to todo) + add feedback\n\n")
+	sb.WriteString("**IMPORTANT**: Always move tasks after review. Tasks left in review are stuck.\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
@@ -1432,20 +1441,20 @@ func buildPlannerPrompt(board *kanban.Board, workDir string) string {
 func buildMergePrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a MERGE COORDINATOR for the Forge supervisor. All tasks are complete and ready for merge.\n\n")
+	sb.WriteString("You are a MERGE COORDINATOR for the Forge supervisor. Tasks have passed review and are ready for merge.\n\n")
 
-	sb.WriteString("## Completed Tasks\n\n")
-	doneCount := 0
+	sb.WriteString("## Tasks Ready to Merge\n\n")
+	mergeCount := 0
 	for _, col := range board.Columns {
-		if col.Status == kanban.StatusDone {
+		if col.Status == kanban.StatusMerge {
 			for _, issue := range col.Issues {
 				sb.WriteString(fmt.Sprintf("- %s: %s (branch: task/%s)\n", issue.ID[:8], issue.Title, issue.ID[:8]))
-				doneCount++
+				mergeCount++
 			}
 		}
 	}
-	if doneCount == 0 {
-		sb.WriteString("(no completed tasks)\n")
+	if mergeCount == 0 {
+		sb.WriteString("(no tasks in merge queue)\n")
 	}
 
 	sb.WriteString("\n## Task Branches\n\n")
@@ -1454,20 +1463,22 @@ func buildMergePrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("- View branch changes: `git log main..task/<id> --oneline`\n\n")
 
 	sb.WriteString("## Pre-Merge Checklist\n\n")
-	sb.WriteString("- [ ] All tests pass: `make test`\n")
-	sb.WriteString("- [ ] No linting errors: `make lint`\n")
-	sb.WriteString("- [ ] Code is properly formatted: `make fmt`\n")
+	sb.WriteString("- [ ] All tests pass: `go test ./...`\n")
+	sb.WriteString("- [ ] Code builds: `go build ./...`\n")
 	sb.WriteString("- [ ] No merge conflicts between branches\n\n")
 
 	sb.WriteString("## Your Tasks\n\n")
 	sb.WriteString("1. Check handoffs: `search_memory_facts({ query: \"forge-handoff TO: merge\" })`\n")
 	sb.WriteString("2. List task branches to merge: `git branch | grep task/`\n")
-	sb.WriteString("3. For each task branch:\n")
+	sb.WriteString("3. For each task in merge queue:\n")
 	sb.WriteString("   - Merge to main: `git checkout main && git merge task/<id> --no-ff -m \"Merge task/<id>: <title>\"`\n")
 	sb.WriteString("   - Resolve any conflicts\n")
-	sb.WriteString("   - Delete branch after merge: `git branch -d task/<id>`\n")
-	sb.WriteString("4. Run final tests on main: `make test`\n")
-	sb.WriteString("5. Push to remote if appropriate: `git push origin main`\n\n")
+	sb.WriteString("   - Delete branch: `git branch -d task/<id>`\n")
+	sb.WriteString("   - **Move to done**: `foundry kanban move <id> d`\n")
+	sb.WriteString("4. Run final tests: `go test ./...`\n")
+	sb.WriteString("5. Push to remote: `git push origin main`\n\n")
+
+	sb.WriteString("**IMPORTANT**: After merging each task, move it to done with `foundry kanban move <id> d`\n\n")
 
 	sb.WriteString(leader.SequentialThinkingTriggers)
 	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n\n", workDir))
@@ -1721,11 +1732,12 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 		}
 	}
 
-	fmt.Printf("\n📊 Tasks: %d backlog, %d todo, %d in-progress, %d review, %d done\n",
+	fmt.Printf("\n📊 Tasks: %d backlog, %d todo, %d in-progress, %d review, %d merge, %d done\n",
 		counts[kanban.StatusBacklog],
 		counts[kanban.StatusTodo],
 		counts[kanban.StatusInProgress],
 		counts[kanban.StatusReview],
+		counts[kanban.StatusMerge],
 		counts[kanban.StatusDone],
 	)
 
@@ -2332,7 +2344,7 @@ func executeSmartAction(action smartAction, store *kanban.Store, reg *worker.Reg
 // syncToGitHub runs the GitHub Projects sync command
 func syncToGitHub(state *supervisorState) {
 	// Only sync every 5 cycles to avoid rate limiting
-	if state.lastDoneCount%5 != 0 {
+	if state.lastMergeCount%5 != 0 {
 		return
 	}
 

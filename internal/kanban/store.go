@@ -403,7 +403,7 @@ func bdToKanbanIssue(bdi *bdIssue) *Issue {
 // Status mapping: kanban <-> bd
 //
 // Beads only has: open, in_progress, closed
-// Kanban has: backlog, todo, in_progress, review, done
+// Kanban has: backlog, todo, in_progress, review, merge, done
 //
 // We use kanban:* labels to preserve the finer-grained kanban status.
 //
@@ -413,6 +413,7 @@ func bdToKanbanIssue(bdi *bdIssue) *Issue {
 // | todo           | open         | kanban:todo    |
 // | in_progress    | in_progress  | kanban:wip     |
 // | review         | in_progress  | kanban:review  |
+// | merge          | in_progress  | kanban:merge   |
 // | done           | closed       | (none needed)  |
 
 // bdToKanbanStatusWithLabels determines kanban status from bd status + labels.
@@ -434,6 +435,8 @@ func bdToKanbanStatusWithLabels(bdStatus string, labels []string) Status {
 			return StatusInProgress
 		case "kanban:review":
 			return StatusReview
+		case "kanban:merge":
+			return StatusMerge
 		}
 	}
 
@@ -468,6 +471,8 @@ func kanbanLabelForStatus(status Status) string {
 		return "kanban:wip"
 	case StatusReview:
 		return "kanban:review"
+	case StatusMerge:
+		return "kanban:merge"
 	case StatusDone:
 		return "" // closed status is unambiguous
 	default:
@@ -479,7 +484,7 @@ func kanbanToBdStatus(status Status) string {
 	switch status {
 	case StatusBacklog, StatusTodo:
 		return "open"
-	case StatusInProgress, StatusReview:
+	case StatusInProgress, StatusReview, StatusMerge:
 		return "in_progress"
 	case StatusDone:
 		return "closed"

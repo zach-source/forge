@@ -50,15 +50,7 @@ CREATED: [ID] - [Title]
 
 ### Completion
 
-When finished, output your completion promise:
-` + "```" + `
-<promise>YOUR_PROMISE_HERE</promise>
-
-## Summary
-- Created: X items
-- Updated: Y items
-- Issues: Z (if any)
-` + "```" + `
+When finished, output your completion promise using the promise tag shown in your identity section above.
 `
 
 // HandoffProtocol provides instructions for passing context between agents.

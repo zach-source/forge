@@ -236,13 +236,14 @@ func newKanbanMoveCmd() *cobra.Command {
 		Short: "Move issue to a different status",
 		Long: `Move an issue to a different kanban column.
 
-Valid statuses: backlog, todo, in_progress, review, done
+Valid statuses: backlog, todo, in_progress, review, merge, done
 
 Shortcuts:
   b = backlog
   t = todo
   p = in_progress (progress)
   r = review
+  m = merge
   d = done`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -267,7 +268,7 @@ Shortcuts:
 				}
 			}
 			if !valid {
-				return fmt.Errorf("invalid status: %s (valid: backlog, todo, in_progress, review, done)", statusArg)
+				return fmt.Errorf("invalid status: %s (valid: backlog, todo, in_progress, review, merge, done)", statusArg)
 			}
 
 			if err := store.Move(id, status); err != nil {
@@ -290,6 +291,8 @@ func expandStatus(s string) kanban.Status {
 		return kanban.StatusInProgress
 	case "r", "review":
 		return kanban.StatusReview
+	case "m", "merge":
+		return kanban.StatusMerge
 	case "d", "done", "complete":
 		return kanban.StatusDone
 	default:

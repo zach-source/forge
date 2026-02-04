@@ -13,12 +13,13 @@ const (
 	StatusTodo       Status = "todo"
 	StatusInProgress Status = "in_progress"
 	StatusReview     Status = "review"
+	StatusMerge      Status = "merge"
 	StatusDone       Status = "done"
 )
 
 // ValidStatuses returns all valid status values.
 func ValidStatuses() []Status {
-	return []Status{StatusBacklog, StatusTodo, StatusInProgress, StatusReview, StatusDone}
+	return []Status{StatusBacklog, StatusTodo, StatusInProgress, StatusReview, StatusMerge, StatusDone}
 }
 
 // Priority represents issue priority.
