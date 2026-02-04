@@ -423,21 +423,36 @@ func (m Model) renderOutput() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("  📋 Output [%s]:\n", sessionName))
 
+	// Calculate available height for output pane
+	// Layout: header(1) + tabs(1) + sessions_label(1) + sessions_box(n+2) + output_label(1) + help(1) + margins(2)
+	sessionBoxHeight := len(sessions) + 2 // sessions + border
+	usedHeight := 1 + 1 + 1 + sessionBoxHeight + 1 + 1 + 2
+	availableHeight := m.height - usedHeight
+	if availableHeight < 4 {
+		availableHeight = 4
+	}
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
 		Width(m.safeWidth()).
-		Height(8)
+		Height(availableHeight)
+
+	// Content height is box height minus border (2 lines)
+	contentLines := availableHeight - 2
+	if contentLines < 1 {
+		contentLines = 1
+	}
 
 	var content string
 	if len(m.output) == 0 {
 		content = theme.MutedStyle.Render("No output available")
 	} else {
-		// Take last 8 lines
+		// Take last N lines to fill available space
 		start := 0
-		if len(m.output) > 8 {
-			start = len(m.output) - 8
+		if len(m.output) > contentLines {
+			start = len(m.output) - contentLines
 		}
 		lines := m.output[start:]
 		content = strings.Join(lines, "\n")
