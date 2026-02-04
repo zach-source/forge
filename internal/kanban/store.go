@@ -290,30 +290,29 @@ func (s *Store) updateKanbanLabel(id string, status Status) error {
 
 // removeKanbanLabels removes all kanban: prefixed labels from an issue.
 func (s *Store) removeKanbanLabels(id string) error {
-	// Get raw bd issue to access all labels including kanban: ones
-	cmd := exec.Command("bd", "show", id, "--json")
-	cmd.Dir = s.workDir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil // Best effort
+	issue, err := s.Get(id)
+	if err != nil || issue == nil {
+		return err
 	}
 
-	var bdIssues []bdIssue
-	if err := json.Unmarshal(out, &bdIssues); err != nil || len(bdIssues) == 0 {
-		return nil
-	}
-
-	// Find kanban labels to remove
-	var kanbanLabels []string
-	for _, label := range bdIssues[0].Labels {
+	// Keep only non-kanban labels
+	var newLabels []string
+	hasKanbanLabel := false
+	for _, label := range issue.Labels {
 		if strings.HasPrefix(label, "kanban:") {
-			kanbanLabels = append(kanbanLabels, label)
+			hasKanbanLabel = true
+		} else {
+			newLabels = append(newLabels, label)
 		}
 	}
 
-	// Remove each kanban label
-	for _, label := range kanbanLabels {
-		cmd := exec.Command("bd", "update", id, "--remove-label", label)
+	// Only update if there was a kanban label to remove
+	if hasKanbanLabel {
+		labelArg := strings.Join(newLabels, ",")
+		if labelArg == "" {
+			labelArg = " " // Use space to clear labels (bd may require non-empty)
+		}
+		cmd := exec.Command("bd", "update", id, "--set-labels", labelArg)
 		cmd.Dir = s.workDir
 		cmd.CombinedOutput() // Best effort
 	}
@@ -419,7 +418,12 @@ func bdToKanbanIssue(bdi *bdIssue) *Issue {
 // bdToKanbanStatusWithLabels determines kanban status from bd status + labels.
 // This preserves the 5-column kanban view on top of beads' 3-status system.
 func bdToKanbanStatusWithLabels(bdStatus string, labels []string) Status {
-	// Check for kanban: label first
+	// Closed always means done, regardless of any stale kanban labels
+	if bdStatus == "closed" {
+		return StatusDone
+	}
+
+	// Check for kanban: label to determine finer-grained status
 	for _, label := range labels {
 		switch label {
 		case "kanban:backlog":
@@ -443,8 +447,6 @@ func bdToKanbanStatusWithLabels(bdStatus string, labels []string) Status {
 		return StatusBacklog
 	case "deferred":
 		return StatusBacklog
-	case "closed":
-		return StatusDone
 	default:
 		return StatusBacklog
 	}

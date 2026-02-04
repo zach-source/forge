@@ -46,6 +46,8 @@ const (
 	RoleMerge Role = "merge"
 	// RoleDeploy is a deployment leader (single-threaded)
 	RoleDeploy Role = "deploy"
+	// RoleGroomer researches and details backlog items before moving to todo
+	RoleGroomer Role = "groomer"
 )
 
 // String returns the string representation of a Role.
@@ -60,13 +62,13 @@ func (r Role) IsSingleThreaded() bool {
 
 // ValidRoles returns all valid role values.
 func ValidRoles() []Role {
-	return []Role{RoleWorker, RolePlanner, RoleReviewer, RoleMerge, RoleDeploy}
+	return []Role{RoleWorker, RolePlanner, RoleReviewer, RoleMerge, RoleDeploy, RoleGroomer}
 }
 
 // ParseRole parses a string into a Role.
 func ParseRole(s string) (Role, error) {
 	switch Role(s) {
-	case RoleWorker, RolePlanner, RoleReviewer, RoleMerge, RoleDeploy:
+	case RoleWorker, RolePlanner, RoleReviewer, RoleMerge, RoleDeploy, RoleGroomer:
 		return Role(s), nil
 	default:
 		return "", fmt.Errorf("invalid role: %q", s)
@@ -176,6 +178,8 @@ func (w *Worker) RoleIcon() string {
 		return "🔀"
 	case RoleDeploy:
 		return "🚀"
+	case RoleGroomer:
+		return "🧹"
 	default:
 		return "❓"
 	}

@@ -16,6 +16,9 @@ const (
 
 	// Analyzer promises
 	PromiseAnalyzer = "ANALYZER_COMPLETE"
+
+	// Groomer promises
+	PromiseGroomer = "GROOMER_COMPLETE"
 )
 
 // WorkerPromiseFormat is the format string for worker promises.

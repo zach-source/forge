@@ -52,6 +52,7 @@ foundry worker create --alias "api-dev"
 | `worker` | Development tasks | No |
 | `planner` | Planning, task breakdown | No |
 | `reviewer` | Code review | No |
+| `groomer` | Backlog research and detailing | No |
 | `merge` | PR merge coordination | Yes (locked) |
 | `deploy` | Deployment | Yes (locked) |
 
@@ -59,6 +60,7 @@ foundry worker create --alias "api-dev"
 foundry worker create --role worker    # Default
 foundry worker create --role planner   # Planning
 foundry worker create --role reviewer  # Review
+foundry worker create --role groomer   # Backlog grooming (parallel)
 foundry worker create --role merge     # Single-threaded
 foundry worker create --role deploy    # Single-threaded
 ```
@@ -68,20 +70,34 @@ foundry worker create --role deploy    # Single-threaded
 Workers are automatically managed by the supervisor:
 
 ```bash
-# Setup workers
+# Setup workers (create multiple for parallel execution)
 foundry worker create                    # alpha (worker)
-foundry worker create --role reviewer    # bravo (reviewer)
-foundry worker create --role merge       # charlie (merge)
+foundry worker create                    # bravo (worker)
+foundry worker create                    # charlie (worker)
+foundry worker create                    # delta (worker)
+foundry worker create --role groomer     # echo (groomer - researches backlog)
+foundry worker create --role reviewer    # foxtrot (reviewer)
+foundry worker create --role merge       # golf (merge)
 
-# Run supervisor - handles assignment automatically
-foundry supervisor --leaders --interval 30s
+# Run supervisor - handles assignment automatically (up to 4 parallel)
+foundry supervisor --leaders --interval 30s --max-workers 4
 ```
 
 The supervisor will:
-1. Assign idle workers to todo tasks
-2. Move completed tasks to review
-3. Launch reviewer for tasks in review
-4. Launch merge/deploy after all tasks done
+1. Assign up to `--max-workers` (default 4) in parallel
+2. Create isolated worktree per task (`.forge/worktrees/<task-id>/`)
+3. Move completed tasks to review, cleanup worktree
+4. Launch groomer to research and detail backlog items (runs parallel)
+5. Launch reviewer alongside active workers
+6. Launch merge/deploy after all tasks done
+
+## Task Isolation
+
+When managed by the supervisor, each worker gets:
+- **Worktree**: `.forge/worktrees/<task-id>/`
+- **Branch**: `task/<task-id>`
+- No file conflicts between parallel workers
+- Reviewer checks branches, merge leader combines to main
 
 ## Manual Workflow
 

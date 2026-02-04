@@ -12,10 +12,11 @@ Automated orchestration that coordinates workers and leaders through the kanban 
 ## Usage
 
 ```
-/supervisor              # Start with defaults (2min interval)
+/supervisor              # Start with defaults (2min interval, 4 workers)
 /supervisor fast         # 30s interval
 /supervisor leaders      # Enable leader agents
 /supervisor full         # Leaders + 30s interval
+/supervisor parallel     # Max workers (8)
 /supervisor cleanup      # Clean up orphaned sessions
 ```
 
@@ -41,7 +42,12 @@ Automated orchestration that coordinates workers and leaders through the kanban 
    foundry supervisor --leaders --interval 30s
    ```
 
-5. **"cleanup"**: Clean up orphaned tmux sessions
+5. **"parallel"**: Maximum parallel workers (8)
+   ```bash
+   foundry supervisor --max-workers 8
+   ```
+
+6. **"cleanup"**: Clean up orphaned tmux sessions
    ```bash
    foundry supervisor --cleanup-orphans --dry-run
    ```
@@ -49,15 +55,17 @@ Automated orchestration that coordinates workers and leaders through the kanban 
 ## Workflow
 
 ```
-todo → in_progress (worker) → review (reviewer) → done → merge → deploy
+backlog → (groomer details) → todo → in_progress (worker) → review (reviewer) → done → merge → deploy
 ```
 
 The supervisor:
 1. Health checks - Detects stale workers (session gone or Claude exited)
-2. Assigns idle workers to todo tasks
-3. Pokes active workers periodically
-4. Moves finished tasks to review
-5. Launches leader agents when appropriate
+2. Assigns up to `--max-workers` (default 4) in parallel
+3. Creates isolated worktree per task (`.forge/worktrees/<id>/`, branch `task/<id>`)
+4. Pokes active workers periodically
+5. Moves finished tasks to review, cleans up worktrees
+6. Launches groomer to research and detail backlog items (runs parallel with workers)
+7. Launches leader agents (reviewer runs alongside workers)
 
 ## Setup Example
 
@@ -68,7 +76,8 @@ foundry kanban add "Task 2" -p medium -s todo
 
 # 2. Create workers
 foundry worker create                    # alpha (worker)
-foundry worker create --role reviewer    # bravo (reviewer)
+foundry worker create --role groomer     # bravo (groomer - researches backlog)
+foundry worker create --role reviewer    # charlie (reviewer)
 
 # 3. Run supervisor
 foundry supervisor --leaders --interval 30s

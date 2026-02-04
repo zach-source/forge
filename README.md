@@ -23,7 +23,8 @@ This repository contains two complementary CLI tools:
 │    WORKERS    │      │    LEADERS    │      │    KANBAN     │
 │ alpha, bravo  │      │ planner       │      │ View on beads │
 │ charlie, ...  │      │ reviewer      │      │ issue tracker │
-│ (NATO names)  │      │ merge, deploy │      │               │
+│ (NATO names)  │      │ groomer       │      │               │
+│               │      │ merge, deploy │      │               │
 └───────┬───────┘      └───────┬───────┘      └───────────────┘
         │                      │
         └──────────┬───────────┘
@@ -103,11 +104,14 @@ Automated orchestration that coordinates workers and leaders through the kanban 
 # Run supervisor with 30-second intervals
 foundry supervisor --interval 30s
 
-# Enable all leader agents (planner, reviewer, merge, deploy)
+# Set max concurrent workers (default 4)
+foundry supervisor --max-workers 4
+
+# Enable all leader agents (groomer, planner, reviewer, merge, deploy)
 foundry supervisor --leaders
 
 # Full autonomous workflow
-foundry supervisor --interval 1m --leaders
+foundry supervisor --interval 1m --leaders --max-workers 4
 
 # Task analysis and automatic requeue of stuck tasks
 foundry supervisor --auto-requeue --stuck 30m
@@ -122,10 +126,13 @@ foundry supervisor --cleanup-orphans
 foundry supervisor --cleanup-orphans --dry-run
 ```
 
-Workflow: `todo` → `in_progress` (worker) → `review` (reviewer) → `done` → merge → deploy
+Workflow: `backlog` → (groomer) → `todo` → `in_progress` (worker) → `review` (reviewer) → `done` → merge → deploy
 
 Features:
-- Assigns idle workers to todo tasks
+- **Parallel execution**: Up to `--max-workers` (default 4) concurrent workers
+- **Task isolation**: Each task gets its own worktree (`.forge/worktrees/<id>/`) and branch (`task/<id>`)
+- Groomer researches backlog items, runs parallel with workers
+- Reviewer can run alongside active workers
 - Pokes active workers periodically
 - Analyzes stuck tasks and requeues them
 - Launches leaders based on workflow state
@@ -159,7 +166,7 @@ foundry worker log alpha -n 50      # View output
 foundry worker reassign alpha bravo # Transfer task
 ```
 
-Worker roles: `worker`, `planner`, `reviewer`, `merge`, `deploy`
+Worker roles: `worker`, `planner`, `reviewer`, `groomer`, `merge`, `deploy`
 
 ### External Board Sync
 
@@ -186,6 +193,9 @@ foundry planner     # Strategic planning, task breakdown
 foundry reviewer    # Code review, issue creation
 foundry merge       # PR merge coordination (single-threaded)
 foundry deploy      # Deployment and smoke testing
+
+# Groomer (created via worker, runs automatically with --leaders)
+foundry worker create --role groomer  # Backlog research and detailing
 ```
 
 ### Shutdown
@@ -231,21 +241,26 @@ foundry kanban add "Set up React project" -p critical -s todo
 foundry kanban add "Build user auth" -p high -s todo
 foundry kanban add "Add tests" -p medium -s todo
 
-# Create workers
+# Create workers (more for parallel execution)
 foundry worker create                    # alpha (worker)
-foundry worker create --role reviewer    # bravo (reviewer)
-foundry worker create --role merge       # charlie (merge)
+foundry worker create                    # bravo (worker)
+foundry worker create                    # charlie (worker)
+foundry worker create                    # delta (worker)
+foundry worker create --role groomer     # echo (groomer - researches backlog)
+foundry worker create --role reviewer    # foxtrot (reviewer)
+foundry worker create --role merge       # golf (merge)
 
-# Run supervisor - handles everything automatically
-foundry supervisor --leaders --interval 30s
+# Run supervisor - handles everything automatically (up to 4 parallel)
+foundry supervisor --leaders --interval 30s --max-workers 4
 ```
 
 The supervisor will:
-1. Assign idle workers to todo tasks
-2. Move completed tasks to review
-3. Launch reviewer to check completed work
-4. Launch merge leader when all tasks done
-5. Launch deploy leader after merge
+1. Assign up to 4 workers in parallel (configurable via `--max-workers`)
+2. Launch groomer to research and detail backlog items (runs parallel)
+3. Move completed tasks to review
+4. Launch reviewer alongside active workers
+5. Launch merge leader when all tasks done
+6. Launch deploy leader after merge
 
 ### Manual
 

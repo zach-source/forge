@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -44,22 +45,19 @@ func (s *Session) Create() error {
 		return ErrSessionExists
 	}
 
-	// Create detached session
+	// Create detached session with bash for simpler, faster startup
 	args := []string{
 		"new-session",
 		"-d",         // Detached
 		"-s", s.Name, // Session name
 		"-c", s.WorkDir, // Working directory
+		"bash", "--norc", "--noprofile", // Use bash with no config for speed
 	}
 
 	cmd := exec.Command("tmux", args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("creating tmux session: %w", err)
 	}
-
-	// Set up isolated shell environment for forge sessions
-	// This prevents polluting the user's shell history
-	s.setupForgeEnvironment()
 
 	// Set up pipe-pane for logging if log file specified
 	if s.LogFile != "" {
@@ -71,28 +69,6 @@ func (s *Session) Create() error {
 	}
 
 	return nil
-}
-
-// setupForgeEnvironment configures the shell environment for forge sessions.
-// This isolates history and sets helpful environment variables.
-func (s *Session) setupForgeEnvironment() {
-	// Set up isolated history file for this session
-	histFile := fmt.Sprintf("/tmp/forge-history-%s", s.Name)
-
-	envSetup := fmt.Sprintf(
-		"export HISTFILE=%s; export FORGE_SESSION=%s; export FORGE_WORKDIR=%s",
-		shellQuote(histFile),
-		shellQuote(s.Name),
-		shellQuote(s.WorkDir),
-	)
-
-	// Send environment setup silently
-	cmd := exec.Command("tmux", "send-keys", "-t", s.Name, envSetup, "Enter")
-	_ = cmd.Run() // Ignore errors, non-critical
-
-	// Clear the screen so the env setup isn't visible
-	clearCmd := exec.Command("tmux", "send-keys", "-t", s.Name, "clear", "Enter")
-	_ = clearCmd.Run()
 }
 
 // Exists returns true if the tmux session exists.
@@ -133,10 +109,25 @@ func (s *Session) RunCommand(command string) error {
 }
 
 // RunClaude runs a Claude command in the tmux session.
+// For long prompts, uses a temp file to avoid tmux send-keys limitations.
 func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) error {
-	// Build claude command
+	// Write prompt to temp file for reliability with long/complex prompts
+	promptFile, err := os.CreateTemp("", "forge-prompt-*.txt")
+	if err != nil {
+		return fmt.Errorf("creating prompt file: %w", err)
+	}
+	promptPath := promptFile.Name()
+
+	if _, err := promptFile.WriteString(prompt); err != nil {
+		promptFile.Close()
+		os.Remove(promptPath)
+		return fmt.Errorf("writing prompt file: %w", err)
+	}
+	promptFile.Close()
+
+	// Build claude command using the temp file
 	var cmdParts []string
-	cmdParts = append(cmdParts, "claude", "-p", shellQuote(prompt))
+	cmdParts = append(cmdParts, "claude", "-p", fmt.Sprintf("\"$(cat %s)\"", promptPath))
 
 	if skipPermissions {
 		cmdParts = append(cmdParts, "--dangerously-skip-permissions")
@@ -148,6 +139,9 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 
 	// Add allowed tools
 	cmdParts = append(cmdParts, "--allowedTools", `"*"`)
+
+	// Add cleanup of temp file after command starts
+	cmdParts = append(cmdParts, fmt.Sprintf("; rm -f %s", promptPath))
 
 	cmd := strings.Join(cmdParts, " ")
 	return s.SendKeys(cmd)
@@ -317,30 +311,31 @@ func isShellPrompt(line string) bool {
 }
 
 // IsClaudeRunning checks if Claude appears to be running in the session.
-// Returns false if the session shows a shell prompt (indicating Claude has exited).
+// Uses tmux's pane_current_command to reliably detect if Claude is running.
 func (s *Session) IsClaudeRunning() bool {
 	if !s.Exists() {
 		return false
 	}
 
-	lines, err := s.CapturePaneLines(10)
+	// Get the current command running in the pane
+	cmd := exec.Command("tmux", "list-panes", "-t", s.Name, "-F", "#{pane_current_command}")
+	out, err := cmd.Output()
 	if err != nil {
 		return true // Assume running if we can't check
 	}
 
-	// Check last few non-empty lines for shell prompt
-	for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
+	command := strings.TrimSpace(string(out))
+
+	// Claude shows as version number (e.g., "2.1.30") or "claude"
+	// Shell shows as "zsh", "bash", "sh", etc.
+	shellCommands := []string{"zsh", "bash", "sh", "fish", "tcsh", "csh", "ksh"}
+	for _, shell := range shellCommands {
+		if command == shell {
+			return false // Shell is running, Claude has exited
 		}
-		if isShellPrompt(line) {
-			return false // Shell prompt visible, Claude has exited
-		}
-		break // Found non-empty, non-prompt line
 	}
 
-	return true
+	return true // Claude or other process is running
 }
 
 // shellQuote quotes a string for safe shell usage.
