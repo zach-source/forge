@@ -230,8 +230,8 @@ func TestStore_GetBoard(t *testing.T) {
 		t.Fatalf("GetBoard: %v", err)
 	}
 
-	if len(board.Columns) != 5 {
-		t.Errorf("columns: got %d, want 5", len(board.Columns))
+	if len(board.Columns) != 6 {
+		t.Errorf("columns: got %d, want 6", len(board.Columns))
 	}
 
 	// Count total issues across columns

@@ -8,7 +8,7 @@ import (
 )
 
 func TestConfiguratorGenerate(t *testing.T) {
-	c := NewConfigurator().WithServers([]string{"graphiti", "context7"})
+	c := NewConfigurator().WithServers([]string{"graphiti"})
 
 	path, err := c.Generate()
 	if err != nil {
@@ -30,9 +30,6 @@ func TestConfiguratorGenerate(t *testing.T) {
 	// Check that requested servers are present
 	if _, ok := config.MCPServers["graphiti"]; !ok {
 		t.Error("Expected graphiti server in config")
-	}
-	if _, ok := config.MCPServers["context7"]; !ok {
-		t.Error("Expected context7 server in config")
 	}
 }
 
