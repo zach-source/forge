@@ -114,7 +114,7 @@ func (c *StateController) Write(state *State) error {
 	}
 
 	if err := os.Rename(tmpPath, c.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("renaming state file: %w", err)
 	}
 
@@ -149,7 +149,7 @@ func (c *StateController) Update(updater func(*State)) error {
 	}
 
 	if err := os.Rename(tmpPath, c.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("renaming state file: %w", err)
 	}
 

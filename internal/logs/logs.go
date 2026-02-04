@@ -167,7 +167,7 @@ func (w *RotatingWriter) openFile() error {
 	// Get current size
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("getting file info: %w", err)
 	}
 
@@ -260,15 +260,14 @@ func compressFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("opening source file: %w", err)
 	}
-	defer src.Close()
 
 	// Create destination file
 	dstPath := path + ".gz"
 	dst, err := os.Create(dstPath)
 	if err != nil {
+		_ = src.Close()
 		return fmt.Errorf("creating gzip file: %w", err)
 	}
-	defer dst.Close()
 
 	// Create gzip writer
 	gz := gzip.NewWriter(dst)
@@ -277,18 +276,34 @@ func compressFile(path string) error {
 
 	// Copy contents
 	if _, err := io.Copy(gz, src); err != nil {
-		os.Remove(dstPath)
+		_ = gz.Close()
+		_ = dst.Close()
+		_ = src.Close()
+		_ = os.Remove(dstPath)
 		return fmt.Errorf("compressing file: %w", err)
 	}
 
 	// Close gzip writer
 	if err := gz.Close(); err != nil {
-		os.Remove(dstPath)
+		_ = dst.Close()
+		_ = src.Close()
+		_ = os.Remove(dstPath)
 		return fmt.Errorf("closing gzip writer: %w", err)
 	}
 
+	// Close destination file
+	if err := dst.Close(); err != nil {
+		_ = src.Close()
+		_ = os.Remove(dstPath)
+		return fmt.Errorf("closing destination file: %w", err)
+	}
+
+	// Close source before removing (required on Windows)
+	if err := src.Close(); err != nil {
+		return fmt.Errorf("closing source file: %w", err)
+	}
+
 	// Remove original file
-	src.Close() // Close before removing on Windows
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("removing original file: %w", err)
 	}

@@ -37,7 +37,7 @@ func TestNewRotatingWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if w.Path() != logPath {
 		t.Errorf("Path() = %q, want %q", w.Path(), logPath)
@@ -61,7 +61,7 @@ func TestRotatingWriter_Write(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	data := []byte("hello world\n")
 	n, err := w.Write(data)
@@ -100,7 +100,7 @@ func TestRotatingWriter_RotatesOnMaxSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Write enough data to trigger rotation
 	data := bytes.Repeat([]byte("x"), 60)
@@ -238,16 +238,17 @@ func TestRotatingWriter_CompressesRotatedFiles(t *testing.T) {
 			t.Errorf("opening gzip file: %v", err)
 			continue
 		}
-		defer f.Close()
 
 		gz, err := gzip.NewReader(f)
 		if err != nil {
+			_ = f.Close()
 			t.Errorf("creating gzip reader: %v", err)
 			continue
 		}
-		defer gz.Close()
 
 		content, err := io.ReadAll(gz)
+		_ = gz.Close()
+		_ = f.Close()
 		if err != nil {
 			t.Errorf("reading gzip content: %v", err)
 			continue

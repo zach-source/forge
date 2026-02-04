@@ -150,6 +150,7 @@ type supervisorState struct {
 	allTasksDone    bool
 	mergeCompleted  bool
 	deployCompleted bool
+	lastDoneCount   int // track Done count to detect new completions
 
 	// Analysis tracking
 	lastAnalysis time.Time // when we last ran the analyzer
@@ -1146,14 +1147,23 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	}
 
 	// 4. Check if there are done tasks to merge
-	hasDoneTasks := counts[kanban.StatusDone] > 0
+	doneCount := counts[kanban.StatusDone]
+	hasDoneTasks := doneCount > 0
 	pendingWork := counts[kanban.StatusBacklog] + counts[kanban.StatusTodo] +
 		counts[kanban.StatusInProgress] + counts[kanban.StatusReview]
 	state.allTasksDone = pendingWork == 0 && hasDoneTasks
 
+	// Reset mergeCompleted if new tasks moved to Done (allows merge for new work)
+	if doneCount > state.lastDoneCount && state.mergeCompleted {
+		fmt.Printf("🔄 New tasks completed, resetting merge state\n")
+		state.mergeCompleted = false
+	}
+	state.lastDoneCount = doneCount
+
 	// 5. MERGE: Run when there are done tasks (can run alongside workers)
 	// The merge leader will merge task branches for completed tasks
-	if hasDoneTasks && !state.merge.running {
+	// Don't restart if merge already completed (prevents infinite loop)
+	if hasDoneTasks && !state.merge.running && !state.mergeCompleted {
 		startMerge(store, reg, state, workDir, board)
 		// Don't return - allow other leaders to run too
 	}
