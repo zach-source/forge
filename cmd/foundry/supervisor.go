@@ -231,6 +231,7 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 }
 
 // clearLeaderState clears the in-memory leader state for a given role.
+// Also sets workflow completion flags for merge/deploy.
 func clearLeaderState(role worker.Role, state *supervisorState) {
 	switch role {
 	case worker.RolePlanner:
@@ -242,9 +243,13 @@ func clearLeaderState(role worker.Role, state *supervisorState) {
 	case worker.RoleMerge:
 		state.merge.running = false
 		state.merge.sessionID = ""
+		state.mergeCompleted = true
+		fmt.Printf("   ✅ Merge workflow completed\n")
 	case worker.RoleDeploy:
 		state.deploy.running = false
 		state.deploy.sessionID = ""
+		state.deployCompleted = true
+		fmt.Printf("   ✅ Deploy workflow completed\n")
 	case worker.RoleGroomer:
 		state.groomer.running = false
 		state.groomer.sessionID = ""
