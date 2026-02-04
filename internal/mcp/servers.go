@@ -17,11 +17,6 @@ func DefaultServers() map[string]Server {
 			Command: "npx",
 			Args:    []string{"-y", "mcp-remote", "http://localhost:51847/mcp/"},
 		},
-		"context7": {
-			Type:    "stdio",
-			Command: "npx",
-			Args:    []string{"-y", "@context7/mcp"},
-		},
 		"sequential-thinking": {
 			Type:    "stdio",
 			Command: "npx",
@@ -57,5 +52,5 @@ func GetServer(name string) *Server {
 
 // AvailableServers returns the names of all available default servers.
 func AvailableServers() []string {
-	return []string{"graphiti", "context7", "sequential-thinking", "notion", "github"}
+	return []string{"graphiti", "sequential-thinking", "notion", "github"}
 }

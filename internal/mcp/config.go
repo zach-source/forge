@@ -24,7 +24,7 @@ type Configurator struct {
 func NewConfigurator() *Configurator {
 	return &Configurator{
 		ExtraServers:  make(map[string]Server),
-		SelectedNames: []string{"graphiti", "context7"}, // Default selection
+		SelectedNames: []string{"graphiti"}, // Default selection
 	}
 }
 

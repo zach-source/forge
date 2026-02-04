@@ -2,13 +2,8 @@
   "mcpServers": {
     "graphiti": {
       "type": "stdio",
-      "command": "uvx",
-      "args": ["graphiti-mcp"]
-    },
-    "context7": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@context7/mcp"]
+      "args": ["-y", "mcp-remote", "http://localhost:51847/mcp/"]
     },
     "sequential-thinking": {
       "type": "stdio",
