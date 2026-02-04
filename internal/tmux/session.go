@@ -61,11 +61,15 @@ func (s *Session) Create() error {
 
 	// Set up pipe-pane for logging if log file specified
 	if s.LogFile != "" {
-		pipeCmd := exec.Command("tmux", "pipe-pane", "-t", s.Name, "-o", fmt.Sprintf("cat >> %s", s.LogFile))
+		// Use tee for better buffering and reliability
+		pipeCmd := exec.Command("tmux", "pipe-pane", "-t", s.Name, "-o", fmt.Sprintf("tee -a %s", s.LogFile))
 		if err := pipeCmd.Run(); err != nil {
-			// Non-fatal, just log
-			fmt.Printf("Warning: failed to set up pipe-pane: %v\n", err)
+			return fmt.Errorf("setting up pipe-pane: %w", err)
 		}
+
+		// Increase history-limit as safety net for scrollback
+		histCmd := exec.Command("tmux", "set-option", "-t", s.Name, "history-limit", "50000")
+		histCmd.Run() // Non-fatal
 	}
 
 	return nil

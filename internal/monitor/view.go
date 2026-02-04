@@ -15,6 +15,14 @@ import (
 	"golang.org/x/text/language"
 )
 
+// safeWidth returns a minimum safe width for rendering boxes.
+func (m Model) safeWidth() int {
+	if m.width < 46 {
+		return 40
+	}
+	return m.width - 6
+}
+
 // renderView renders the main view.
 func (m Model) renderView() string {
 	var sb strings.Builder
@@ -131,7 +139,7 @@ func (m Model) renderKanbanSummary() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6)
+		Width(m.safeWidth())
 
 	var rows []string
 	for _, col := range m.kanban.Columns {
@@ -181,7 +189,7 @@ func (m Model) renderWorkerSummary() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6)
+		Width(m.safeWidth())
 
 	// Count by status
 	statusCounts := make(map[worker.Status]int)
@@ -267,7 +275,7 @@ func (m Model) renderWorkersTab() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6)
+		Width(m.safeWidth())
 
 	var rows []string
 	for i, w := range m.workers {
@@ -346,7 +354,7 @@ func (m Model) renderSessionList() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6)
+		Width(m.safeWidth())
 
 	var rows []string
 	for i, s := range sessions {
@@ -419,7 +427,7 @@ func (m Model) renderOutput() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6).
+		Width(m.safeWidth()).
 		Height(8)
 
 	var content string
@@ -454,7 +462,7 @@ func (m Model) renderLogsTab() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.Subtle).
 		Padding(0, 1).
-		Width(m.width - 6)
+		Width(m.safeWidth())
 
 	var rows []string
 	// Show up to 15 most recent logs

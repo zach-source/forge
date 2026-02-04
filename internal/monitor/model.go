@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,6 +90,8 @@ func NewModel(workDir string) Model {
 		sessions:  mgr,
 		keyMap:    DefaultKeyMap(),
 		workDir:   workDir,
+		width:     80, // Default before WindowSizeMsg
+		height:    24, // Default before WindowSizeMsg
 	}
 }
 
@@ -316,20 +319,58 @@ func (m Model) refreshAll() tea.Msg {
 	}
 }
 
-// updateOutput updates the output preview for the selected session.
+// updateOutput updates the output preview for the selected item.
 func (m *Model) updateOutput() {
-	if m.activeTab != TabSessions {
-		return
+	switch m.activeTab {
+	case TabSessions:
+		sessions := m.sessions.List()
+		if len(sessions) > 0 && m.selected < len(sessions) {
+			s := sessions[m.selected]
+			// Try tmux capture first
+			if output, err := m.sessions.CaptureOutput(s.ID, 30); err == nil && len(output) > 0 {
+				m.output = output
+				return
+			}
+			// Fall back to log file
+			if s.LogFile != "" {
+				m.output = readLastLines(s.LogFile, 30)
+			} else {
+				m.output = nil
+			}
+		}
+	case TabWorkers:
+		if len(m.workers) > 0 && m.selected < len(m.workers) {
+			w := m.workers[m.selected]
+			// Try to get log from worker's log file
+			logPath := logs.WorkerLogPath(w.Name)
+			m.output = readLastLines(logPath, 30)
+		}
+	default:
+		m.output = nil
 	}
-	sessions := m.sessions.List()
-	if len(sessions) > 0 && m.selected < len(sessions) {
-		s := sessions[m.selected]
-		if output, err := m.sessions.CaptureOutput(s.ID, 15); err == nil {
-			m.output = output
-		} else {
-			m.output = nil
+}
+
+// readLastLines reads the last n lines from a file.
+func readLastLines(path string, n int) []string {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		// Keep buffer at 2x size to avoid constant reallocation
+		if len(lines) > n*2 {
+			lines = lines[len(lines)-n:]
 		}
 	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
 }
 
 // cancelSession cancels a session.
