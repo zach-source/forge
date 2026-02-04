@@ -39,6 +39,7 @@ Examples:
 	rootCmd.AddCommand(
 		// Local tools
 		newKanbanCmd(),
+		newLogsCmd(),
 		// Orchestration
 		newWorkerCmd(),
 		newBoardCmd(),
