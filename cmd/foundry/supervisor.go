@@ -33,6 +33,8 @@ func newSupervisorCmd() *cobra.Command {
 		cleanupOrphans       bool
 		dryRun               bool
 		smartMode            bool
+		githubSync           bool
+		stateLog             string
 	)
 
 	cmd := &cobra.Command{
@@ -83,6 +85,8 @@ Examples:
 				cleanupOrphans:       cleanupOrphans,
 				dryRun:               dryRun,
 				smartMode:            smartMode,
+				githubSync:           githubSync,
+				stateLog:             stateLog,
 			})
 		},
 	}
@@ -99,6 +103,8 @@ Examples:
 	cmd.Flags().BoolVar(&cleanupOrphans, "cleanup-orphans", true, "Clean up orphaned tmux sessions on startup (disable with --cleanup-orphans=false)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be cleaned without taking action")
 	cmd.Flags().BoolVar(&smartMode, "smart", false, "Use AI (Haiku) to make orchestration decisions")
+	cmd.Flags().BoolVar(&githubSync, "github-sync", false, "Sync beads to GitHub Projects each cycle")
+	cmd.Flags().StringVar(&stateLog, "state-log", "", "Path to state log file (JSON lines)")
 
 	return cmd
 }
@@ -116,6 +122,8 @@ type supervisorConfig struct {
 	cleanupOrphans       bool
 	dryRun               bool
 	smartMode            bool
+	githubSync           bool
+	stateLog             string
 }
 
 type leaderState struct {
@@ -533,6 +541,16 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 
 	// 8. Summary
 	printSummary(store, reg, state)
+
+	// 9. GitHub sync (if enabled)
+	if cfg.githubSync {
+		syncToGitHub(state)
+	}
+
+	// 10. State logging (if enabled)
+	if cfg.stateLog != "" {
+		writeStateLog(cfg.stateLog, store, reg, state)
+	}
 }
 
 func checkCompletedWorkers(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string) {
@@ -2288,4 +2306,110 @@ func executeSmartAction(action smartAction, store *kanban.Store, reg *worker.Reg
 	default:
 		fmt.Printf("   ⚠️  Unknown action: %s\n", action.Action)
 	}
+}
+
+// syncToGitHub runs the GitHub Projects sync command
+func syncToGitHub(state *supervisorState) {
+	// Only sync every 5 cycles to avoid rate limiting
+	if state.lastDoneCount%5 != 0 {
+		return
+	}
+
+	cmd := exec.Command("foundry", "board", "--github", "--sync")
+	cmd.Stdout = nil // Silent
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("⚠️  GitHub sync failed to start: %v\n", err)
+		return
+	}
+	// Don't wait - let it run in background
+	go func() {
+		_ = cmd.Wait() // Silent failure - sync is best-effort
+	}()
+}
+
+// StateLogEntry represents a single state log entry
+type StateLogEntry struct {
+	Timestamp       string          `json:"timestamp"`
+	Tasks           map[string]int  `json:"tasks"`
+	Workers         WorkerSummary   `json:"workers"`
+	Leaders         map[string]bool `json:"leaders"`
+	MergeCompleted  bool            `json:"merge_completed"`
+	DeployCompleted bool            `json:"deploy_completed"`
+	AllTasksDone    bool            `json:"all_tasks_done"`
+}
+
+// WorkerSummary summarizes worker state
+type WorkerSummary struct {
+	Active  int      `json:"active"`
+	Idle    int      `json:"idle"`
+	Stopped int      `json:"stopped"`
+	Names   []string `json:"active_names,omitempty"`
+}
+
+// writeStateLog appends state to a JSON lines log file
+func writeStateLog(logPath string, store *kanban.Store, reg *worker.Registry, state *supervisorState) {
+	// Count tasks by status
+	counts := make(map[string]int)
+	for _, status := range []kanban.Status{
+		kanban.StatusBacklog, kanban.StatusTodo, kanban.StatusInProgress,
+		kanban.StatusReview, kanban.StatusDone,
+	} {
+		issues, _ := store.List(status)
+		counts[string(status)] = len(issues)
+	}
+
+	// Count workers
+	var activeNames []string
+	activeCount, idleCount, stoppedCount := 0, 0, 0
+	for _, w := range reg.List() {
+		switch w.Status {
+		case worker.StatusActive:
+			activeCount++
+			activeNames = append(activeNames, w.DisplayName())
+		case worker.StatusIdle:
+			idleCount++
+		case worker.StatusStopped:
+			stoppedCount++
+		}
+	}
+
+	// Build leader status
+	leaders := map[string]bool{
+		"planner":  state.planner.running,
+		"reviewer": state.reviewer.running,
+		"merge":    state.merge.running,
+		"deploy":   state.deploy.running,
+		"analyzer": state.analyzer.running,
+		"groomer":  state.groomer.running,
+	}
+
+	entry := StateLogEntry{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Tasks:     counts,
+		Workers: WorkerSummary{
+			Active:  activeCount,
+			Idle:    idleCount,
+			Stopped: stoppedCount,
+			Names:   activeNames,
+		},
+		Leaders:         leaders,
+		MergeCompleted:  state.mergeCompleted,
+		DeployCompleted: state.deployCompleted,
+		AllTasksDone:    state.allTasksDone,
+	}
+
+	// Append to log file
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return // Silent failure
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(data)
+	_, _ = f.WriteString("\n")
 }
