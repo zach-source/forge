@@ -8,10 +8,28 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/zach-source/forge/internal/kanban"
+	"github.com/zach-source/forge/internal/logs"
 	"github.com/zach-source/forge/internal/ralph"
 	"github.com/zach-source/forge/internal/session"
 	"github.com/zach-source/forge/internal/tmux"
+	"github.com/zach-source/forge/internal/worker"
 )
+
+// Tab represents a tab in the monitor TUI.
+type Tab int
+
+const (
+	TabOverview Tab = iota
+	TabWorkers
+	TabSessions
+	TabLogs
+)
+
+// tabNames returns the display names for tabs.
+func tabNames() []string {
+	return []string{"Overview", "Workers", "Sessions", "Logs"}
+}
 
 // tickMsg is sent on each refresh tick.
 type tickMsg time.Time
@@ -21,6 +39,14 @@ type sessionRefreshedMsg struct {
 	sessions []*session.Session
 }
 
+// dataRefreshedMsg is sent after all data is refreshed.
+type dataRefreshedMsg struct {
+	sessions   []*session.Session
+	workers    []*worker.Worker
+	kanban     *kanban.Board
+	logEntries []logs.LogEntry
+}
+
 // attachMsg is sent when we should attach to a session.
 type attachMsg struct {
 	sessionName string
@@ -28,13 +54,28 @@ type attachMsg struct {
 
 // Model is the Bubbletea model for the monitor TUI.
 type Model struct {
-	sessions  *session.Manager
-	selected  int
-	output    []string
-	width     int
-	height    int
-	keyMap    KeyMap
-	workDir   string
+	// Tab state
+	activeTab Tab
+	selected  int // selected item in current tab
+
+	// Data
+	sessions   *session.Manager
+	workers    []*worker.Worker
+	kanban     *kanban.Board
+	logEntries []logs.LogEntry
+
+	// Output preview
+	output []string
+
+	// Dimensions
+	width  int
+	height int
+
+	// Config
+	keyMap  KeyMap
+	workDir string
+
+	// State
 	quitting  bool
 	attaching string
 	error     string
@@ -44,16 +85,17 @@ type Model struct {
 func NewModel(workDir string) Model {
 	mgr := session.NewManager()
 	return Model{
-		sessions: mgr,
-		keyMap:   DefaultKeyMap(),
-		workDir:  workDir,
+		activeTab: TabOverview,
+		sessions:  mgr,
+		keyMap:    DefaultKeyMap(),
+		workDir:   workDir,
 	}
 }
 
 // Init initializes the model.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		m.refreshSessions,
+		m.refreshAll,
 		m.tick(),
 	)
 }
@@ -67,12 +109,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(m.refreshSessions, m.tick())
+		return m, tea.Batch(m.refreshAll, m.tick())
 
-	case sessionRefreshedMsg:
+	case dataRefreshedMsg:
+		m.workers = msg.workers
+		m.kanban = msg.kanban
+		m.logEntries = msg.logEntries
 		// Update output for selected session
 		sessions := msg.sessions
-		if len(sessions) > 0 && m.selected < len(sessions) {
+		if len(sessions) > 0 && m.activeTab == TabSessions && m.selected < len(sessions) {
+			s := sessions[m.selected]
+			if output, err := m.sessions.CaptureOutput(s.ID, 15); err == nil {
+				m.output = output
+			}
+		}
+		return m, nil
+
+	case sessionRefreshedMsg:
+		// Legacy handler - update output for selected session
+		sessions := msg.sessions
+		if len(sessions) > 0 && m.activeTab == TabSessions && m.selected < len(sessions) {
 			s := sessions[m.selected]
 			if output, err := m.sessions.CaptureOutput(s.ID, 15); err == nil {
 				m.output = output
@@ -94,6 +150,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		case key.Matches(msg, m.keyMap.TabNext):
+			m.activeTab = (m.activeTab + 1) % 4
+			m.selected = 0
+			m.output = nil
+			return m, nil
+
+		case key.Matches(msg, m.keyMap.TabPrev):
+			m.activeTab = (m.activeTab + 3) % 4 // +3 is same as -1 mod 4
+			m.selected = 0
+			m.output = nil
+			return m, nil
+
+		case key.Matches(msg, m.keyMap.Tab1):
+			m.activeTab = TabOverview
+			m.selected = 0
+			return m, nil
+
+		case key.Matches(msg, m.keyMap.Tab2):
+			m.activeTab = TabWorkers
+			m.selected = 0
+			return m, nil
+
+		case key.Matches(msg, m.keyMap.Tab3):
+			m.activeTab = TabSessions
+			m.selected = 0
+			return m, nil
+
+		case key.Matches(msg, m.keyMap.Tab4):
+			m.activeTab = TabLogs
+			m.selected = 0
+			return m, nil
+
 		case key.Matches(msg, m.keyMap.Up):
 			if m.selected > 0 {
 				m.selected--
@@ -102,39 +190,79 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keyMap.Down):
-			sessions := m.sessions.List()
-			if m.selected < len(sessions)-1 {
+			maxItems := m.maxItemsForTab()
+			if m.selected < maxItems-1 {
 				m.selected++
 				m.updateOutput()
 			}
 			return m, nil
 
 		case key.Matches(msg, m.keyMap.Attach):
-			sessions := m.sessions.List()
-			if len(sessions) > 0 && m.selected < len(sessions) {
-				s := sessions[m.selected]
-				if s.Tmux != "" {
-					return m, func() tea.Msg {
-						return attachMsg{sessionName: s.Tmux}
-					}
-				}
-			}
-			return m, nil
+			return m, m.handleAttach()
 
 		case key.Matches(msg, m.keyMap.Cancel):
-			sessions := m.sessions.List()
-			if len(sessions) > 0 && m.selected < len(sessions) {
-				s := sessions[m.selected]
-				m.cancelSession(s.ID)
-			}
-			return m, m.refreshSessions
+			return m, m.handleCancel()
 
 		case key.Matches(msg, m.keyMap.Refresh):
-			return m, m.refreshSessions
+			return m, m.refreshAll
 		}
 	}
 
 	return m, nil
+}
+
+// maxItemsForTab returns the max items for the current tab.
+func (m Model) maxItemsForTab() int {
+	switch m.activeTab {
+	case TabWorkers:
+		return len(m.workers)
+	case TabSessions:
+		return len(m.sessions.List())
+	case TabLogs:
+		return len(m.logEntries)
+	default:
+		return 0
+	}
+}
+
+// handleAttach handles the attach action based on current tab.
+func (m Model) handleAttach() tea.Cmd {
+	switch m.activeTab {
+	case TabSessions:
+		sessions := m.sessions.List()
+		if len(sessions) > 0 && m.selected < len(sessions) {
+			s := sessions[m.selected]
+			if s.Tmux != "" {
+				return func() tea.Msg {
+					return attachMsg{sessionName: s.Tmux}
+				}
+			}
+		}
+	case TabWorkers:
+		if len(m.workers) > 0 && m.selected < len(m.workers) {
+			w := m.workers[m.selected]
+			if w.SessionID != "" {
+				return func() tea.Msg {
+					return attachMsg{sessionName: w.TmuxSessionName()}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// handleCancel handles the cancel action based on current tab.
+func (m *Model) handleCancel() tea.Cmd {
+	switch m.activeTab {
+	case TabSessions:
+		sessions := m.sessions.List()
+		if len(sessions) > 0 && m.selected < len(sessions) {
+			s := sessions[m.selected]
+			m.cancelSession(s.ID)
+		}
+		return m.refreshAll
+	}
+	return nil
 }
 
 // View renders the TUI.
@@ -157,15 +285,42 @@ func (m Model) tick() tea.Cmd {
 	})
 }
 
-// refreshSessions fetches the latest session list.
-func (m Model) refreshSessions() tea.Msg {
+// refreshAll fetches all data.
+func (m Model) refreshAll() tea.Msg {
+	// Refresh sessions
 	m.sessions.Discover()
 	m.sessions.DiscoverLocal(m.workDir)
-	return sessionRefreshedMsg{sessions: m.sessions.List()}
+	sessions := m.sessions.List()
+
+	// Refresh workers
+	var workers []*worker.Worker
+	if reg, err := worker.LoadRegistry(); err == nil {
+		workers = reg.List()
+	}
+
+	// Refresh kanban
+	var board *kanban.Board
+	if store, err := kanban.NewStore(m.workDir); err == nil {
+		board, _ = store.GetBoard()
+		store.Close()
+	}
+
+	// Refresh log entries
+	logEntries, _ := logs.ListLogs(logs.ListOptions{})
+
+	return dataRefreshedMsg{
+		sessions:   sessions,
+		workers:    workers,
+		kanban:     board,
+		logEntries: logEntries,
+	}
 }
 
 // updateOutput updates the output preview for the selected session.
 func (m *Model) updateOutput() {
+	if m.activeTab != TabSessions {
+		return
+	}
 	sessions := m.sessions.List()
 	if len(sessions) > 0 && m.selected < len(sessions) {
 		s := sessions[m.selected]
