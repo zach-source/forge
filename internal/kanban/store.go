@@ -290,21 +290,30 @@ func (s *Store) updateKanbanLabel(id string, status Status) error {
 
 // removeKanbanLabels removes all kanban: prefixed labels from an issue.
 func (s *Store) removeKanbanLabels(id string) error {
-	issue, err := s.Get(id)
-	if err != nil || issue == nil {
-		return err
+	// Get raw bd issue to access all labels including kanban: ones
+	cmd := exec.Command("bd", "show", id, "--json")
+	cmd.Dir = s.workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil // Best effort
 	}
 
-	// Keep only non-kanban labels
-	var newLabels []string
-	for _, label := range issue.Labels {
-		if !strings.HasPrefix(label, "kanban:") {
-			newLabels = append(newLabels, label)
+	var bdIssues []bdIssue
+	if err := json.Unmarshal(out, &bdIssues); err != nil || len(bdIssues) == 0 {
+		return nil
+	}
+
+	// Find kanban labels to remove
+	var kanbanLabels []string
+	for _, label := range bdIssues[0].Labels {
+		if strings.HasPrefix(label, "kanban:") {
+			kanbanLabels = append(kanbanLabels, label)
 		}
 	}
 
-	if len(newLabels) > 0 {
-		cmd := exec.Command("bd", "update", id, "--set-labels", strings.Join(newLabels, ","))
+	// Remove each kanban label
+	for _, label := range kanbanLabels {
+		cmd := exec.Command("bd", "update", id, "--remove-label", label)
 		cmd.Dir = s.workDir
 		cmd.CombinedOutput() // Best effort
 	}

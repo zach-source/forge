@@ -363,5 +363,5 @@ func TestPriorityMapping(t *testing.T) {
 func init() {
 	// Create test fixtures directory if needed
 	fixturesDir := filepath.Join(os.TempDir(), "kanban-test-fixtures")
-	os.MkdirAll(fixturesDir, 0755)
+	os.MkdirAll(fixturesDir, 0o755)
 }

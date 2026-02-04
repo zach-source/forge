@@ -103,13 +103,13 @@ func (c *StateController) Write(state *State) error {
 
 	// Ensure directory exists
 	dir := filepath.Dir(c.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
 	// Write atomically via temp file
 	tmpPath := c.path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("writing temp state file: %w", err)
 	}
 
@@ -144,7 +144,7 @@ func (c *StateController) Update(updater func(*State)) error {
 	}
 
 	tmpPath := c.path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("writing temp state file: %w", err)
 	}
 

@@ -48,7 +48,7 @@ const (
 // Init initializes a new forge workspace in the given directory.
 func Init(dir, name, description string) (*Workspace, error) {
 	// Ensure directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating workspace directory: %w", err)
 	}
 
@@ -60,7 +60,7 @@ func Init(dir, name, description string) (*Workspace, error) {
 
 	// Create .forge directory
 	forgeDir := filepath.Join(dir, ConfigDir)
-	if err := os.MkdirAll(forgeDir, 0755); err != nil {
+	if err := os.MkdirAll(forgeDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating .forge directory: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func Init(dir, name, description string) (*Workspace, error) {
 	subdirs := []string{"sessions", "logs", "repos", "worktrees"}
 	for _, sub := range subdirs {
 		subPath := filepath.Join(forgeDir, sub)
-		if err := os.MkdirAll(subPath, 0755); err != nil {
+		if err := os.MkdirAll(subPath, 0o755); err != nil {
 			return nil, fmt.Errorf("creating %s directory: %w", sub, err)
 		}
 	}
@@ -95,7 +95,7 @@ worktrees/
 *.tmp
 `
 	gitignorePath := filepath.Join(forgeDir, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
+	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0o644); err != nil {
 		// Non-fatal
 		fmt.Printf("Warning: failed to create .gitignore: %v\n", err)
 	}
@@ -149,7 +149,7 @@ func (w *Workspace) Save() error {
 	configPath := filepath.Join(w.Path, ConfigDir, ConfigFile)
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 
@@ -158,7 +158,7 @@ func (w *Workspace) Save() error {
 		return fmt.Errorf("marshaling workspace config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		return fmt.Errorf("writing workspace config: %w", err)
 	}
 
