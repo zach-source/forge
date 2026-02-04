@@ -26,7 +26,7 @@ func WorkerIdentityPrompt(w *Worker, taskID string, promise string) string {
 	}
 
 	sb.WriteString("\n## Memory Protocol\n\n")
-	sb.WriteString(fmt.Sprintf("Store memories in Graphiti with your worker identity:\n"))
+	sb.WriteString("Store memories in Graphiti with your worker identity:\n")
 	sb.WriteString(fmt.Sprintf("- Group ID: `%s`\n", w.GraphitiGroupID()))
 	sb.WriteString(fmt.Sprintf("- Include `worker:%s` tag in all memories\n\n", w.Name))
 
@@ -35,7 +35,7 @@ func WorkerIdentityPrompt(w *Worker, taskID string, promise string) string {
 	sb.WriteString(fmt.Sprintf("- `search_memory_facts({ query: \"worker:%s decisions\" })`\n", w.Name))
 
 	sb.WriteString("\n## Completion\n\n")
-	sb.WriteString(fmt.Sprintf("When you have completed your task, output:\n"))
+	sb.WriteString("When you have completed your task, output:\n")
 	sb.WriteString(fmt.Sprintf("```\n<promise>%s</promise>\n```\n", promise))
 
 	return sb.String()

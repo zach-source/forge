@@ -278,15 +278,15 @@ func createBeadFromLegacy(workDir string, issue *legacyIssue) error {
 	newID := strings.TrimSpace(string(out))
 
 	// Set status if not open
-	bdStatus := legacyToBdStatus(issue.Status)
-	if bdStatus == "in_progress" {
+	switch bdStatus := legacyToBdStatus(issue.Status); bdStatus {
+	case "in_progress":
 		updateCmd := exec.Command("bd", "update", newID, "-s", "in_progress")
 		updateCmd.Dir = workDir
 		if _, err := updateCmd.CombinedOutput(); err != nil {
 			// Non-fatal, issue was created
 			fmt.Printf("    Warning: could not set status to in_progress\n")
 		}
-	} else if bdStatus == "closed" {
+	case "closed":
 		closeCmd := exec.Command("bd", "close", newID)
 		closeCmd.Dir = workDir
 		if _, err := closeCmd.CombinedOutput(); err != nil {

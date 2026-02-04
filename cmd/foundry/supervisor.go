@@ -152,8 +152,7 @@ type supervisorState struct {
 	deployCompleted bool
 
 	// Analysis tracking
-	lastAnalysis    time.Time // when we last ran the analyzer
-	analysisResults []string  // recommendations from last analysis
+	lastAnalysis time.Time // when we last ran the analyzer
 }
 
 func newSupervisorState() *supervisorState {
@@ -266,13 +265,6 @@ func clearLeaderState(role worker.Role, state *supervisorState) {
 func recoverMisplacedTasks(store *kanban.Store, state *supervisorState, workDir string) {
 	// Skip recovery - let merge leader handle unmerged branches
 	// Tasks in Done are waiting for merge, not incorrectly placed
-	return
-}
-
-// checkBranchExists checks if a git branch exists in the repository.
-func checkBranchExists(gitRepo, branchName string) bool {
-	cmd := exec.Command("git", "-C", gitRepo, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
-	return cmd.Run() == nil
 }
 
 // recoverOrphanedTasks moves in-progress tasks with no assigned worker back to todo.
@@ -761,10 +753,11 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 			fmt.Printf("🏁 %s finished\n", name)
 
 			// Set completion flags for merge and deploy
-			if role == worker.RoleMerge {
+			switch role {
+			case worker.RoleMerge:
 				state.mergeCompleted = true
 				fmt.Printf("   ✅ Merge workflow completed\n")
-			} else if role == worker.RoleDeploy {
+			case worker.RoleDeploy:
 				state.deployCompleted = true
 				fmt.Printf("   ✅ Deploy workflow completed\n")
 			}
@@ -1872,8 +1865,7 @@ func createTaskWorktree(baseDir, taskID string) (string, error) {
 	}
 
 	cmd := exec.Command("git", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	if _, err := cmd.CombinedOutput(); err != nil {
 		// If branch exists, try without -b
 		args = []string{
 			"-C", gitRepo,
@@ -1882,7 +1874,7 @@ func createTaskWorktree(baseDir, taskID string) (string, error) {
 			taskBranch,
 		}
 		cmd = exec.Command("git", args...)
-		output, err = cmd.CombinedOutput()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("creating worktree: %w\n%s", err, string(output))
 		}

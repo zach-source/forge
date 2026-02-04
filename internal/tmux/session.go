@@ -235,7 +235,7 @@ func (s *Session) WaitForClaudeExit(timeout time.Duration) (string, error) {
 	stableCount := 0
 	firstPoll := true
 
-	for time.Now().Sub(start) < timeout {
+	for time.Since(start) < timeout {
 		content, err := s.CapturePane()
 		if err != nil {
 			// Session disappeared - use last valid content if we have it
