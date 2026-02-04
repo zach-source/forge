@@ -20,6 +20,7 @@ const (
 	RoleReviewer   Role = "reviewer"
 	RoleMerge      Role = "merge"
 	RoleDeployment Role = "deployment"
+	RoleGroomer    Role = "groomer"
 )
 
 // Config holds configuration for a leader session.
@@ -118,6 +119,7 @@ func printBanner(role Role, databaseID string) {
 		RoleReviewer:   "🔍",
 		RoleMerge:      "🔀",
 		RoleDeployment: "🚀",
+		RoleGroomer:    "🧹",
 	}
 
 	names := map[Role]string{
@@ -125,6 +127,7 @@ func printBanner(role Role, databaseID string) {
 		RoleReviewer:   "Reviewer",
 		RoleMerge:      "Merge Leader",
 		RoleDeployment: "Deployment Leader",
+		RoleGroomer:    "Backlog Groomer",
 	}
 
 	icon := icons[role]

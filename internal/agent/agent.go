@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/zach-source/forge/internal/detector"
+	"github.com/zach-source/forge/internal/logs"
 	"github.com/zach-source/forge/internal/mcp"
 	"github.com/zach-source/forge/internal/ralph"
 	"github.com/zach-source/forge/internal/session"
@@ -106,7 +106,19 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer os.Remove(mcpPath)
 
 	// 4. Create tmux session
-	logFile := filepath.Join(os.TempDir(), sessionID+".log")
+	logFile := a.config.LogFile
+	if logFile == "" {
+		var err error
+		logFile, err = logs.SessionLogPath(sessionID)
+		if err != nil {
+			return fmt.Errorf("getting session log path: %w", err)
+		}
+	} else {
+		// Ensure log directories exist even when custom logFile is provided
+		if _, err := logs.EnsureDir(); err != nil {
+			return fmt.Errorf("creating log directory: %w", err)
+		}
+	}
 	a.session = tmux.NewSession(sessionID, a.config.WorkDir, logFile)
 
 	if err := a.session.Create(); err != nil {

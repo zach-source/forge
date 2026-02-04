@@ -35,6 +35,9 @@ type Config struct {
 	WorkerName string
 	// WorkerRole is the worker's role (worker, planner, etc.)
 	WorkerRole string
+
+	// LogFile is an optional custom log file path
+	LogFile string
 }
 
 // DefaultConfig returns a Config with sensible defaults.

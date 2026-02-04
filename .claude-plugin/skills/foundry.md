@@ -23,6 +23,7 @@ Foundry provides high-level development automation on top of forge.
 | Workers | `foundry worker` | Parallel Claude instances |
 | Board Sync | `foundry board` | Notion/GitHub sync |
 | Leaders | `foundry planner/reviewer/merge/deploy` | Specialized agents |
+| Groomer | `foundry worker create --role groomer` | Backlog research |
 | Shutdown | `foundry shutdown` | Stop all agents |
 | Workspace | `foundry init/repo/work` | Multi-repo management |
 
@@ -55,12 +56,15 @@ foundry reviewer
 # Setup
 foundry kanban add "Task 1" -s todo
 foundry worker create                    # alpha
-foundry worker create --role reviewer    # bravo
+foundry worker create                    # bravo
+foundry worker create                    # charlie
+foundry worker create --role groomer     # delta (researches backlog)
+foundry worker create --role reviewer    # echo
 
-# Run
-foundry supervisor --leaders
+# Run (up to 4 workers in parallel by default)
+foundry supervisor --leaders --max-workers 4
 
-# Workflow: todo → in_progress → review → done → merge → deploy
+# Workflow: backlog → (groomer) → todo → in_progress → review → done → merge → deploy
 ```
 
 ## Manual Workflow
@@ -84,6 +88,14 @@ Foundry calls forge internally for session management.
 ## Data Storage
 
 - `.beads/` - Issue database (used by kanban view)
+- `.forge/worktrees/` - Task-specific worktrees (auto-created by supervisor)
 - `.foundry/workspace.yaml` - Workspace config
 - `~/.forge/workers/registry.yaml` - Worker registry
 - `~/.forge/workers/locks/` - Resource locks
+
+## Task Isolation
+
+The supervisor creates isolated worktrees for parallel execution:
+- Each task: `.forge/worktrees/<task-id>/` with branch `task/<task-id>`
+- Workers don't conflict on files
+- Reviewer checks branches, merge leader combines to main

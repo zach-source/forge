@@ -11,8 +11,9 @@ Foundry provides higher-level development workflows that use forge sessions inte
 ### Supervisor (Automated Orchestration)
 
 ```bash
-foundry supervisor                    # Default 2 minute interval
+foundry supervisor                    # Default 2 minute interval, 4 workers
 foundry supervisor --interval 30s     # Faster polling
+foundry supervisor --max-workers 4    # Max concurrent workers (default 4)
 foundry supervisor --leaders          # Enable all leader agents
 foundry supervisor --no-auto-assign   # Only monitor, don't assign
 foundry supervisor -d /path           # Custom working directory
@@ -23,10 +24,13 @@ foundry supervisor --analyze-interval 10m  # Task analysis interval
 foundry supervisor --stuck 30m        # Stuck task threshold
 ```
 
-Workflow: `todo` → `in_progress` → `review` → `done` → merge → deploy
+Workflow: `backlog` → (groomer) → `todo` → `in_progress` → `review` → `done` → merge → deploy
 
 Features:
-- Assigns idle workers to todo tasks
+- Assigns up to `--max-workers` (default 4) in parallel
+- **Task isolation**: Each task gets worktree (`.forge/worktrees/<id>/`) and branch (`task/<id>`)
+- Groomer researches backlog items, adds detail, moves to todo (runs parallel)
+- Reviewer can run alongside active workers
 - Pokes active workers periodically
 - Analyzes stuck tasks and requeues them (--auto-requeue)
 - Launches leaders based on workflow state
@@ -179,37 +183,42 @@ worker.Start(ctx, reg, w.ID, opts)
 ```go
 // supervisor.go - main orchestration loop
 func runCycle(cfg supervisorConfig, state *supervisorState) {
+    // 0. Health checks - detect stale workers
+    checkWorkerHealth(reg, state)
+
     // 1. Check for completed workers → move tasks to review
     checkCompletedWorkers(store, reg, state)
 
-    // 2. Check leader sessions
+    // 2. Analyze and requeue stuck tasks
+    analyzeAndRequeueTasks(store, reg, state, cfg)
+
+    // 3. Check leader sessions
     if cfg.withLeaders {
         checkLeaderSessions(reg, state)
     }
 
-    // 3. Poke active workers
+    // 4. Poke active workers
     pokeActiveWorkers(reg, state, cfg.maxPokes)
 
-    // 4. Assign idle workers to todo tasks
+    // 5. Assign idle workers to todo tasks (up to maxConcurrentWorkers)
     if cfg.autoAssign {
-        assignTasks(store, reg, state, cfg.workDir)
+        assignTasks(store, reg, state, cfg)
     }
 
-    // 5. Run leader workflow if enabled
+    // 6. Run leader workflow if enabled
+    // - Groomer runs parallel, researches backlog items
+    // - Reviewer runs alongside workers
+    // - Merge/deploy wait for all workers to complete
     if cfg.withLeaders {
         runLeaderWorkflow(store, reg, state, cfg.workDir)
     }
-
-    // 6. Analyze and requeue stuck tasks (if enabled)
-    if cfg.autoRequeue && time.Since(state.lastAnalysis) > cfg.analyzeInterval {
-        analyzeAndRequeueTasks(store, reg, state, cfg)
-    }
 }
 
-// Task analysis uses Claude to:
-// - Check if stuck tasks should be requeued
-// - Suggest new tasks based on patterns
-// - Identify abandoned work
+// Parallel execution:
+// - maxConcurrentWorkers (default 4) controls how many workers run simultaneously
+// - Groomer can launch while workers are active (researches backlog)
+// - Reviewer can launch while workers are active
+// - Merge/deploy still wait for all workers to complete
 ```
 
 ## Worker Roles
@@ -219,10 +228,19 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 | `worker` | General development tasks | No |
 | `planner` | Planning and architecture | No |
 | `reviewer` | Code review | No |
+| `groomer` | Backlog research and detailing | No |
 | `merge` | Merge coordination | Yes (locked) |
 | `deploy` | Deployment management | Yes (locked) |
 
 Single-threaded roles use file-based locks in `~/.forge/workers/locks/`.
+
+### Groomer Role
+
+The groomer researches backlog items and ensures they have detailed descriptions before moving to todo:
+- Explores codebase to understand context
+- Adds acceptance criteria and technical approach
+- Breaks down large items into smaller tasks
+- Runs in parallel with workers (doesn't block)
 
 ## Worker Lifecycle
 

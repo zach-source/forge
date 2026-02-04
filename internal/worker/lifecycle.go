@@ -3,12 +3,11 @@ package worker
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/zach-source/forge/internal/agent"
+	"github.com/zach-source/forge/internal/logs"
 	"github.com/zach-source/forge/internal/mcp"
 	"github.com/zach-source/forge/internal/tmux"
 )
@@ -85,6 +84,9 @@ func Start(ctx context.Context, reg *Registry, workerID string, opts StartOption
 	if opts.MCPConfig != "" {
 		cfg.MCPConfigPath = opts.MCPConfig
 	}
+
+	// Set log file path
+	cfg.LogFile = logs.WorkerLogPath(w.Name)
 
 	// Update worker state
 	if err := reg.Update(workerID, func(w *Worker) {
@@ -354,10 +356,9 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-// LogPath returns the path to a worker's log file.
+// LogPath returns the path to a worker's current log file.
 func LogPath(w *Worker) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".forge", "workers", "logs", w.ID+".log")
+	return logs.WorkerLogPath(w.Name)
 }
 
 // GetMCPConfigPath returns the path to a worker's MCP config file.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/zach-source/forge/internal/logs"
 	"github.com/zach-source/forge/internal/session"
 )
 
@@ -74,6 +75,15 @@ Example:
 
 			if s.LogFile == "" && s.State != nil {
 				s.LogFile = s.State.LogFile
+			}
+
+			// Check new log location if state file has no log path
+			if s.LogFile == "" {
+				if logPath, err := logs.SessionLogPath(sessionID); err == nil {
+					if _, statErr := os.Stat(logPath); statErr == nil {
+						s.LogFile = logPath
+					}
+				}
 			}
 
 			if s.LogFile == "" {

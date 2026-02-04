@@ -94,8 +94,9 @@ Foundry provides higher-level features that use forge internally:
 
 ```bash
 # Supervisor - automated orchestration
-foundry supervisor                    # Default 2m interval
+foundry supervisor                    # Default 2m interval, 4 workers
 foundry supervisor --interval 30s     # Faster polling
+foundry supervisor --max-workers 4    # Max concurrent workers (default 4)
 foundry supervisor --leaders          # Enable all leader agents
 
 # Local kanban
@@ -137,6 +138,30 @@ make build-forge        # Build forge only
 make build-foundry      # Build foundry only
 make test               # Run all tests
 make install            # Install both to ~/bin
+```
+
+## Iteration Workflow
+
+When iterating on forge/foundry code, use this command to build and install:
+
+```bash
+go install ./cmd/forge/ ./cmd/foundry/ && \cp -f ~/go/bin/forge ~/go/bin/foundry ~/bin/
+```
+
+This ensures:
+1. Both binaries are compiled with latest changes
+2. Copies to `~/bin/` which is first in PATH
+3. No stale local binaries shadow the installed versions
+
+**Verify installation:**
+```bash
+which foundry        # Should show ~/bin/foundry
+foundry --version    # Should show "foundry version dev"
+```
+
+**Remove local binaries** (if any exist in working directory):
+```bash
+rm -f ./forge ./foundry
 ```
 
 ## Adding Features
@@ -217,16 +242,17 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 // 0. Health check → detects stale workers (session gone or Claude exited)
 // 1. Checks for completed workers → moves tasks to review
 // 2. Pokes active workers periodically
-// 3. Assigns idle workers to todo tasks
+// 3. Assigns idle workers to todo tasks (up to --max-workers in parallel)
 // 4. Analyzes stuck tasks → requeues if --auto-requeue enabled
 // 5. Launches leaders when appropriate:
-//    - Reviewer when tasks in review
+//    - Reviewer when tasks in review (runs alongside workers)
 //    - Planner when backlog needs prioritization
 //    - Merge when all tasks done
 //    - Deploy after merge complete
 
 // Config flags:
 // --interval 30s       Cycle interval (default 2m)
+// --max-workers 4      Max concurrent development workers (default 4)
 // --analyze-interval   Task analysis interval (default 15m)
 // --stuck 30m          Threshold for stuck tasks (default 30m)
 // --auto-requeue       Automatically requeue stuck tasks
@@ -234,12 +260,19 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 // --no-auto-assign     Only monitor, don't assign tasks
 // --cleanup-orphans    Clean up orphaned tmux sessions on startup
 // --dry-run            Preview cleanup without taking action
+
+// Task Isolation:
+// - Each task gets worktree: .forge/worktrees/<task-id>/
+// - Each task gets branch: task/<task-id>
+// - Workers work in isolation, no file conflicts
+// - Worktrees cleaned up when tasks complete
 ```
 
 ## State Files
 
 - `~/.forge/sessions/*.state.md` - Forge session state
 - `~/.forge/workers/registry.yaml` - Worker registry
+- `.forge/worktrees/` - Task-specific worktrees (supervisor creates these)
 - `~/.forge/workers/locks/*.lock` - Resource locks (merge/deploy)
 - `.beads/` - Issue database (used by kanban view)
 - `.foundry/workspace.yaml` - Workspace config
