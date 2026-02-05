@@ -308,10 +308,14 @@ func (m Model) renderWorkersTab() string {
 	sb.WriteString("  ")
 	sb.WriteString(boxStyle.Render(content))
 
+	// Add health detail section for selected worker
+	sb.WriteString("\n")
+	sb.WriteString(m.renderWorkerHealthDetail())
+
 	return sb.String()
 }
 
-// renderWorkerRow renders a single worker row.
+// renderWorkerRow renders a single worker row with health indicators.
 func (m Model) renderWorkerRow(index int, w *worker.Worker) string {
 	// Selection indicator
 	indicator := "  "
@@ -325,24 +329,46 @@ func (m Model) renderWorkerRow(index int, w *worker.Worker) string {
 	statusIcon := w.StatusIcon()
 	roleIcon := w.RoleIcon()
 
+	// Health indicator
+	healthIcon := "💚" // healthy by default
+	if h, ok := m.workerHealth[w.ID]; ok {
+		if h.IsStuck {
+			healthIcon = "⚠️" // stuck warning
+			style = theme.WarningStyle
+		} else if w.Status == worker.StatusActive && !h.SessionActive {
+			healthIcon = "💔" // session dead
+			style = theme.ErrorStyle
+		} else if h.PromiseStatus == PromisePending {
+			healthIcon = "⏳" // waiting for promise
+		}
+	}
+
 	// Task info
 	task := "-"
 	if w.CurrentTask != "" {
-		task = truncate(w.CurrentTask, 15)
+		task = truncate(w.CurrentTask, 12)
 	}
 
-	// Last active
-	elapsed := formatDuration(time.Since(w.LastActive))
+	// Uptime/activity
+	uptimeStr := "-"
+	if h, ok := m.workerHealth[w.ID]; ok && w.Status == worker.StatusActive {
+		if h.Uptime > 0 {
+			uptimeStr = formatDuration(h.Uptime)
+		}
+	} else if !w.LastActive.IsZero() {
+		uptimeStr = formatDuration(time.Since(w.LastActive))
+	}
 
-	// Format: ▸ alpha (👷) 💤 idle     task-abc123    5m ago
-	return style.Render(fmt.Sprintf("%s%-8s %s %s %-8s %-15s %s",
+	// Format: ▸ alpha  👷 💤 idle    💚 task-abc123   5m
+	return style.Render(fmt.Sprintf("%s%-8s %s %s %-8s %s %-12s %6s",
 		indicator,
 		w.DisplayName(),
 		roleIcon,
 		statusIcon,
 		w.Status,
+		healthIcon,
 		task,
-		elapsed,
+		uptimeStr,
 	))
 }
 
@@ -370,6 +396,119 @@ func (m Model) renderWorkerMetrics(index int, w *worker.Worker) string {
 		avgDuration,
 		avgIters,
 	))
+}
+
+// renderWorkerHealthDetail renders detailed health info for the selected worker.
+func (m Model) renderWorkerHealthDetail() string {
+	if len(m.workers) == 0 || m.selected >= len(m.workers) {
+		return ""
+	}
+
+	w := m.workers[m.selected]
+	h, ok := m.workerHealth[w.ID]
+	if !ok {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("  Health [%s]:\n", w.DisplayName()))
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(theme.Subtle).
+		Padding(0, 1).
+		Width(m.safeWidth())
+
+	var rows []string
+
+	// Session status
+	sessionStatus := "inactive"
+	sessionStyle := theme.MutedStyle
+	if h.SessionActive {
+		sessionStatus = "active"
+		sessionStyle = theme.SuccessStyle
+	}
+	rows = append(rows, fmt.Sprintf("  Session:    %s", sessionStyle.Render(sessionStatus)))
+
+	// Uptime
+	uptimeStr := "-"
+	if h.Uptime > 0 {
+		uptimeStr = formatDurationLong(h.Uptime)
+	}
+	rows = append(rows, fmt.Sprintf("  Uptime:     %s", uptimeStr))
+
+	// Last activity
+	activityStr := "-"
+	if !h.LastActivity.IsZero() {
+		activityStr = fmt.Sprintf("%s ago", formatDurationLong(time.Since(h.LastActivity)))
+	}
+	rows = append(rows, fmt.Sprintf("  Activity:   %s", activityStr))
+
+	// Iteration progress
+	if h.Iteration > 0 || h.MaxIterations > 0 {
+		iterStr := fmt.Sprintf("%d", h.Iteration)
+		if h.MaxIterations > 0 {
+			iterStr = fmt.Sprintf("%d/%d", h.Iteration, h.MaxIterations)
+		} else {
+			iterStr = fmt.Sprintf("%d/inf", h.Iteration)
+		}
+		rows = append(rows, fmt.Sprintf("  Iteration:  %s", iterStr))
+	}
+
+	// Promise status
+	promiseStr := "-"
+	promiseStyle := theme.MutedStyle
+	switch h.PromiseStatus {
+	case PromiseNone:
+		promiseStr = "not configured"
+	case PromisePending:
+		promiseStr = fmt.Sprintf("pending %q", truncate(h.Promise, 20))
+		promiseStyle = theme.WarningStyle
+	case PromiseDetected:
+		promiseStr = "detected"
+		promiseStyle = theme.SuccessStyle
+	}
+	rows = append(rows, fmt.Sprintf("  Promise:    %s", promiseStyle.Render(promiseStr)))
+
+	// Stuck warning
+	if h.IsStuck {
+		stuckStr := fmt.Sprintf("STUCK for %s (no activity)", formatDurationLong(h.StuckDuration))
+		rows = append(rows, theme.WarningStyle.Render("  "+stuckStr))
+	}
+
+	sb.WriteString("  ")
+	sb.WriteString(boxStyle.Render(strings.Join(rows, "\n")))
+
+	return sb.String()
+}
+
+// formatDurationLong formats a duration with more detail.
+func formatDurationLong(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		secs := int(d.Seconds()) % 60
+		if secs > 0 {
+			return fmt.Sprintf("%dm %ds", mins, secs)
+		}
+		return fmt.Sprintf("%dm", mins)
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		mins := int(d.Minutes()) % 60
+		if mins > 0 {
+			return fmt.Sprintf("%dh %dm", hours, mins)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	if hours > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
+	}
+	return fmt.Sprintf("%dd", days)
 }
 
 // renderSessionsTab renders the Sessions tab content.

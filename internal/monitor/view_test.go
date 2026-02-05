@@ -653,8 +653,8 @@ func TestRenderWorkerRow_WithTask(t *testing.T) {
 
 	row := m.renderWorkerRow(0, w)
 
-	// Should contain truncated task (15 chars max: 12 + "...")
-	if !strings.Contains(row, "task-very-lo...") {
+	// Should contain truncated task (12 chars max: 9 + "...")
+	if !strings.Contains(row, "task-very...") {
 		t.Error("Row should contain truncated task")
 	}
 }
