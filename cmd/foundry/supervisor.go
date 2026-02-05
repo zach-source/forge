@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/detector"
+	"github.com/zach-source/forge/internal/health"
 	"github.com/zach-source/forge/internal/kanban"
 	"github.com/zach-source/forge/internal/leader"
 	"github.com/zach-source/forge/internal/supervisor/dashboard"
@@ -42,6 +43,10 @@ func newSupervisorCmd() *cobra.Command {
 		githubSync           bool
 		stateLog             string
 		dashboardMode        bool
+		cpuThreshold         float64
+		memThreshold         float64
+		failureThreshold     float64
+		noThrottle           bool
 	)
 
 	cmd := &cobra.Command{
@@ -82,6 +87,14 @@ Examples:
 			// Parse leader flags
 			enabledLeaders := parseLeaderFlags(leadersFlag, noLeadersFlag, withLeaders)
 
+			// Build health thresholds from flags
+			thresholds := health.DefaultThresholds()
+			thresholds.CPUDegraded = cpuThreshold
+			thresholds.CPUCritical = cpuThreshold + 10 // critical is 10% above degraded
+			thresholds.MemoryDegraded = memThreshold
+			thresholds.MemoryCritical = memThreshold + 10
+			thresholds.FailureThreshold = failureThreshold
+
 			return runSupervisor(cmd.Context(), supervisorConfig{
 				interval:             interval,
 				analyzeInterval:      analyzeInterval,
@@ -99,6 +112,8 @@ Examples:
 				githubSync:           githubSync,
 				stateLog:             stateLog,
 				dashboardMode:        dashboardMode,
+				healthThresholds:     thresholds,
+				noThrottle:           noThrottle,
 			})
 		},
 	}
@@ -120,6 +135,10 @@ Examples:
 	cmd.Flags().BoolVar(&smartMode, "smart", false, "Use AI (Haiku) to make orchestration decisions")
 	cmd.Flags().BoolVar(&githubSync, "github-sync", false, "Sync beads to GitHub Projects each cycle")
 	cmd.Flags().StringVar(&stateLog, "state-log", "", "Path to state log file (JSON lines)")
+	cmd.Flags().Float64Var(&cpuThreshold, "cpu-threshold", 80.0, "Degrade assignment above this CPU%")
+	cmd.Flags().Float64Var(&memThreshold, "mem-threshold", 80.0, "Degrade assignment above this memory%")
+	cmd.Flags().Float64Var(&failureThreshold, "failure-threshold", 0.5, "Pause assignment when failure rate exceeds this (0.0-1.0)")
+	cmd.Flags().BoolVar(&noThrottle, "no-throttle", false, "Disable health-based throttling")
 
 	return cmd
 }
@@ -142,6 +161,8 @@ type supervisorConfig struct {
 	stateLog             string
 	dashboardMode        bool
 	webhookDispatcher    *webhooks.Dispatcher
+	healthThresholds     health.ThresholdConfig
+	noThrottle           bool
 }
 
 type leaderState struct {
@@ -240,6 +261,11 @@ type supervisorState struct {
 
 	// Analysis tracking
 	lastAnalysis time.Time // when we last ran the analyzer
+
+	// Health tracking
+	failureTracker  *health.FailureTracker
+	apiErrorTracker *health.APIErrorTracker
+	lastHealth      *health.Metrics
 }
 
 // LeaderTrigger defines when a leader should be activated.
@@ -580,6 +606,8 @@ func newSupervisorState() *supervisorState {
 		lastPaneOutput:       make(map[string]string),
 		unchangedOutputCount: make(map[string]int),
 		leaderLastRun:        make(map[string]time.Time),
+		failureTracker:       health.NewFailureTracker(10),
+		apiErrorTracker:      health.NewAPIErrorTracker(5 * time.Minute),
 	}
 }
 
@@ -642,6 +670,7 @@ func checkWorkerHealth(ctx context.Context, reg *worker.Registry, state *supervi
 				} else {
 					fmt.Printf("   📋 Moved task to Review\n")
 					state.completedTasks[taskID] = true
+					state.failureTracker.Record(true) // task completed successfully
 
 					// Dispatch task_completed webhook
 					if cfg.webhookDispatcher != nil {
@@ -963,6 +992,13 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 		fmt.Printf("   Leaders: none\n")
 	}
 
+	if cfg.noThrottle {
+		fmt.Printf("   Throttle: disabled\n")
+	} else {
+		fmt.Printf("   Throttle: CPU %.0f%%, Mem %.0f%%, Fail %.0f%%\n",
+			cfg.healthThresholds.CPUDegraded, cfg.healthThresholds.MemoryDegraded, cfg.healthThresholds.FailureThreshold*100)
+	}
+
 	// Load webhook configuration
 	webhookCfg, err := webhooks.LoadConfig(cfg.workDir)
 	if err != nil {
@@ -1076,7 +1112,28 @@ func runCycle(ctx context.Context, cfg supervisorConfig, state *supervisorState)
 		return
 	}
 
-	// 0. Health check - detect stale workers with missing tmux sessions
+	// 0. System health check - throttle if resources are constrained
+	if !cfg.noThrottle {
+		metrics, err := health.Check(cfg.healthThresholds, state.failureTracker, state.apiErrorTracker, health.GetResourceMetrics)
+		if err != nil {
+			fmt.Printf("⚠️  Health check error: %v\n", err)
+		} else {
+			state.lastHealth = metrics
+			switch metrics.Status {
+			case health.StatusCritical:
+				fmt.Printf("🛑 Critical: %s — pausing all assignment\n", metrics.Reason)
+				printHealthMetrics(metrics)
+				printSummary(store, reg, state)
+				return
+			case health.StatusDegraded:
+				fmt.Printf("⚠️  Degraded: %s — reducing worker limit\n", metrics.Reason)
+				printHealthMetrics(metrics)
+				cfg.maxConcurrentWorkers = max(1, cfg.maxConcurrentWorkers/2)
+			}
+		}
+	}
+
+	// 0a. Worker health check - detect stale workers with missing tmux sessions
 	checkWorkerHealth(ctx, reg, state, store, cfg)
 
 	// 0.5. Recovery - check for misplaced tasks (done with unmerged branches)
@@ -1178,6 +1235,7 @@ func checkCompletedWorkers(store *kanban.Store, reg *worker.Registry, state *sup
 				}
 
 				state.completedTasks[taskID] = true
+				state.failureTracker.Record(true)        // task completed successfully
 				state.taskCompleted[taskID] = time.Now() // Track completion time
 				delete(state.taskWorkers, taskID)
 				delete(state.workerTasks, w.ID)
@@ -1299,6 +1357,7 @@ func analyzeAndRequeueTasks(ctx context.Context, store *kanban.Store, reg *worke
 					fmt.Printf("   ⚠️  Error requeuing: %v\n", err)
 				} else {
 					fmt.Printf("   ✅ Moved back to Todo\n")
+					state.failureTracker.Record(false) // stuck task counts as failure
 					delete(state.taskStarted, task.ID)
 					delete(state.taskWorkers, task.ID)
 
@@ -3428,6 +3487,19 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 		fmt.Printf("👔 Leaders running: %s\n", strings.Join(activeLeaders, ", "))
 	}
 
+	// Show health status
+	if state.lastHealth != nil {
+		h := state.lastHealth
+		switch h.Status {
+		case health.StatusGood:
+			fmt.Printf("💚 Health: good (CPU %.0f%%, Mem %.0f%%, fail %.0f%%)\n", h.CPUPercent, h.MemoryPercent, h.FailureRate*100)
+		case health.StatusDegraded:
+			fmt.Printf("🟡 Health: degraded — %s\n", h.Reason)
+		case health.StatusCritical:
+			fmt.Printf("🔴 Health: critical — %s\n", h.Reason)
+		}
+	}
+
 	// Check milestones
 	if state.allTasksDone {
 		fmt.Printf("🎉 All tasks completed!\n")
@@ -3438,6 +3510,11 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 	if state.deployCompleted {
 		fmt.Printf("🚀 Deployed!\n")
 	}
+}
+
+func printHealthMetrics(m *health.Metrics) {
+	fmt.Printf("   CPU: %.0f%% | Mem: %.0f%% | Failures: %.0f%% | API errors: %d\n",
+		m.CPUPercent, m.MemoryPercent, m.FailureRate*100, m.APIErrors)
 }
 
 func getKanbanStoreForDir(dir string) (*kanban.Store, error) {
