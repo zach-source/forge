@@ -223,6 +223,22 @@ func (m Model) renderWorkerSummary() string {
 		}
 	}
 
+	// Aggregate metrics
+	if len(m.workerMetrics) > 0 {
+		totalTasks := 0
+		totalSucceeded := 0
+		for _, wm := range m.workerMetrics {
+			totalTasks += wm.TasksCompleted
+			totalSucceeded += wm.TasksSucceeded
+		}
+		if totalTasks > 0 {
+			rows = append(rows, "")
+			rows = append(rows, theme.MutedStyle.Render("  Performance:"))
+			successRate := float64(totalSucceeded) / float64(totalTasks) * 100
+			rows = append(rows, fmt.Sprintf("    📊 Tasks: %d completed (%.0f%% success)", totalTasks, successRate))
+		}
+	}
+
 	return "  " + boxStyle.Render(strings.Join(rows, "\n"))
 }
 
@@ -281,6 +297,11 @@ func (m Model) renderWorkersTab() string {
 	for i, w := range m.workers {
 		row := m.renderWorkerRow(i, w)
 		rows = append(rows, row)
+		// Add metrics line if available
+		metricsRow := m.renderWorkerMetrics(i, w)
+		if metricsRow != "" {
+			rows = append(rows, metricsRow)
+		}
 	}
 
 	content := strings.Join(rows, "\n")
@@ -322,6 +343,32 @@ func (m Model) renderWorkerRow(index int, w *worker.Worker) string {
 		w.Status,
 		task,
 		elapsed,
+	))
+}
+
+// renderWorkerMetrics renders the metrics line for a worker.
+func (m Model) renderWorkerMetrics(index int, w *worker.Worker) string {
+	metrics := m.workerMetrics[w.ID]
+	if metrics == nil || metrics.TasksCompleted == 0 {
+		return ""
+	}
+
+	// Style based on selection
+	style := theme.MutedStyle
+	if m.activeTab == TabWorkers && index == m.selected {
+		style = theme.NormalStyle
+	}
+
+	// Format metrics: Tasks: 5 done (100%)  Avg: 12m  Iters: 45
+	successRate := metrics.SuccessRate()
+	avgDuration := formatDuration(metrics.AvgDuration())
+	avgIters := metrics.AvgIterations()
+
+	return style.Render(fmt.Sprintf("    Tasks: %d done (%.0f%%)  Avg: %s  Iters: %.0f",
+		metrics.TasksCompleted,
+		successRate,
+		avgDuration,
+		avgIters,
 	))
 }
 
