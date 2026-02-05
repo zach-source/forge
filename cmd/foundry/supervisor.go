@@ -616,6 +616,15 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 			if w.Role == worker.RoleWorker && taskID != "" && !state.completedTasks[taskID] {
 				fmt.Printf("✅ Worker %s finished task %s (%s)\n", w.DisplayName(), taskID, reason)
 
+				// Record metrics before moving task
+				startedAt := state.taskStarted[taskID]
+				if startedAt.IsZero() {
+					startedAt = w.LastActive // fallback
+				}
+				if err := worker.RecordWorkerTaskComplete(w.ID, w.Name, taskID, startedAt, w.SessionID, true); err != nil {
+					fmt.Printf("   ⚠️  Error recording metrics: %v\n", err)
+				}
+
 				// Move task to review
 				if err := store.Move(taskID, kanban.StatusReview); err != nil {
 					fmt.Printf("   ⚠️  Error moving task to review: %v\n", err)
@@ -1107,6 +1116,17 @@ func checkCompletedWorkers(store *kanban.Store, reg *worker.Registry, state *sup
 			worktreePath := w.Worktree
 			if taskID != "" && !state.completedTasks[taskID] {
 				fmt.Printf("✅ Worker %s finished task %s\n", w.DisplayName(), taskID)
+
+				// Record metrics before cleanup (need session state for iteration count)
+				startedAt := state.taskStarted[taskID]
+				if startedAt.IsZero() {
+					startedAt = w.LastActive // fallback
+				}
+				if err := worker.RecordWorkerTaskComplete(w.ID, w.Name, taskID, startedAt, w.SessionID, true); err != nil {
+					fmt.Printf("   ⚠️  Error recording metrics: %v\n", err)
+				} else {
+					fmt.Printf("   📊 Recorded task metrics\n")
+				}
 
 				// Move task to review (not done - let reviewer check it)
 				if err := store.Move(taskID, kanban.StatusReview); err != nil {

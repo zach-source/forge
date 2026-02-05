@@ -41,10 +41,11 @@ type sessionRefreshedMsg struct {
 
 // dataRefreshedMsg is sent after all data is refreshed.
 type dataRefreshedMsg struct {
-	sessions   []*session.Session
-	workers    []*worker.Worker
-	kanban     *kanban.Board
-	logEntries []logs.LogEntry
+	sessions      []*session.Session
+	workers       []*worker.Worker
+	workerMetrics map[string]*worker.WorkerMetrics
+	kanban        *kanban.Board
+	logEntries    []logs.LogEntry
 }
 
 // attachMsg is sent when we should attach to a session.
@@ -59,10 +60,11 @@ type Model struct {
 	selected  int // selected item in current tab
 
 	// Data
-	sessions   *session.Manager
-	workers    []*worker.Worker
-	kanban     *kanban.Board
-	logEntries []logs.LogEntry
+	sessions      *session.Manager
+	workers       []*worker.Worker
+	workerMetrics map[string]*worker.WorkerMetrics
+	kanban        *kanban.Board
+	logEntries    []logs.LogEntry
 
 	// Output preview
 	output []string
@@ -115,6 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dataRefreshedMsg:
 		m.workers = msg.workers
+		m.workerMetrics = msg.workerMetrics
 		m.kanban = msg.kanban
 		m.logEntries = msg.logEntries
 		// Update output for selected session
@@ -300,6 +303,12 @@ func (m Model) refreshAll() tea.Msg {
 		workers = reg.List()
 	}
 
+	// Refresh worker metrics
+	var workerMetrics map[string]*worker.WorkerMetrics
+	if metricsStore, err := worker.NewMetricsStore(); err == nil {
+		workerMetrics = metricsStore.GetAllWorkerMetrics()
+	}
+
 	// Refresh kanban
 	var board *kanban.Board
 	if store, err := kanban.NewStore(m.workDir); err == nil {
@@ -311,10 +320,11 @@ func (m Model) refreshAll() tea.Msg {
 	logEntries, _ := logs.ListLogs(logs.ListOptions{})
 
 	return dataRefreshedMsg{
-		sessions:   sessions,
-		workers:    workers,
-		kanban:     board,
-		logEntries: logEntries,
+		sessions:      sessions,
+		workers:       workers,
+		workerMetrics: workerMetrics,
+		kanban:        board,
+		logEntries:    logEntries,
 	}
 }
 
