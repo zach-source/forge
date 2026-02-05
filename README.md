@@ -75,6 +75,11 @@ forge list
 
 # Cancel a session
 forge cancel
+
+# Resume an interrupted session
+forge resume                 # Resume most recent
+forge resume <session-id>    # Resume specific session
+forge resume --list          # List resumable sessions
 ```
 
 That's it. Forge is intentionally minimal.
