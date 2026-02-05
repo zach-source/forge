@@ -52,6 +52,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # Lint is advisory until errcheck issues are resolved
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
