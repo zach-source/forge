@@ -19,6 +19,7 @@ import (
 	"github.com/zach-source/forge/internal/leader"
 	"github.com/zach-source/forge/internal/supervisor/dashboard"
 	"github.com/zach-source/forge/internal/tmux"
+	"github.com/zach-source/forge/internal/webhooks"
 	"github.com/zach-source/forge/internal/worker"
 )
 
@@ -140,6 +141,7 @@ type supervisorConfig struct {
 	githubSync           bool
 	stateLog             string
 	dashboardMode        bool
+	webhookDispatcher    *webhooks.Dispatcher
 }
 
 type leaderState struct {
@@ -584,7 +586,7 @@ func newSupervisorState() *supervisorState {
 // checkWorkerHealth verifies all workers marked Active have existing tmux sessions
 // with Claude actually running. Stale workers are reset and leader state is cleared.
 // For development workers, completed tasks are moved to review.
-func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanban.Store) {
+func checkWorkerHealth(ctx context.Context, reg *worker.Registry, state *supervisorState, store *kanban.Store, cfg supervisorConfig) {
 	workers := reg.List(worker.StatusActive)
 
 	for _, w := range workers {
@@ -616,12 +618,27 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 			if w.Role == worker.RoleWorker && taskID != "" && !state.completedTasks[taskID] {
 				fmt.Printf("✅ Worker %s finished task %s (%s)\n", w.DisplayName(), taskID, reason)
 
+				// Get task details for webhook
+				task, _ := store.Get(taskID)
+				var taskTitle string
+				var taskPriority webhooks.Priority
+				if task != nil {
+					taskTitle = task.Title
+					taskPriority = webhooks.Priority(task.Priority)
+				}
+
 				// Move task to review
 				if err := store.Move(taskID, kanban.StatusReview); err != nil {
 					fmt.Printf("   ⚠️  Error moving task to review: %v\n", err)
 				} else {
 					fmt.Printf("   📋 Moved task to Review\n")
 					state.completedTasks[taskID] = true
+
+					// Dispatch task_completed webhook
+					if cfg.webhookDispatcher != nil {
+						event := webhooks.NewTaskCompletedEvent(taskID, taskTitle, w.DisplayName(), taskPriority, 0)
+						cfg.webhookDispatcher.Dispatch(ctx, event)
+					}
 				}
 			} else if isLeaderRole(w.Role) {
 				if promiseFound {
@@ -639,6 +656,12 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 			}
 			if err := worker.Reset(reg, w.ID); err != nil {
 				fmt.Printf("   ⚠️  Error resetting worker: %v\n", err)
+			}
+
+			// Dispatch worker_stopped webhook
+			if cfg.webhookDispatcher != nil {
+				event := webhooks.NewWorkerStoppedEvent(w.ID, w.DisplayName(), taskID, reason)
+				cfg.webhookDispatcher.Dispatch(ctx, event)
 			}
 
 			// Clear any leader state if this was a leader
@@ -930,6 +953,16 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	} else {
 		fmt.Printf("   Leaders: none\n")
 	}
+
+	// Load webhook configuration
+	webhookCfg, err := webhooks.LoadConfig(cfg.workDir)
+	if err != nil {
+		fmt.Printf("⚠️  Error loading webhooks config: %v\n", err)
+	} else if webhookCfg != nil {
+		cfg.webhookDispatcher = webhooks.NewDispatcher(webhookCfg)
+		fmt.Printf("   Webhooks: %d endpoint(s) configured\n", len(webhookCfg.Webhooks))
+	}
+
 	fmt.Printf("   Press Ctrl+C to stop\n\n")
 
 	// Set up signal handling
@@ -988,7 +1021,7 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	// Helper to run cycle and save state
 	runAndSave := func() {
 		cycleCount++
-		cycleFunc(cfg, state)
+		cycleFunc(ctx, cfg, state)
 
 		// Save state after each cycle
 		ps := buildPersistentState(state, startedAt, cycleCount)
@@ -1015,7 +1048,7 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	}
 }
 
-func runCycle(cfg supervisorConfig, state *supervisorState) {
+func runCycle(ctx context.Context, cfg supervisorConfig, state *supervisorState) {
 	now := time.Now().Format("15:04:05")
 	fmt.Printf("\n━━━ Cycle %s ━━━\n", now)
 
@@ -1035,7 +1068,7 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 	}
 
 	// 0. Health check - detect stale workers with missing tmux sessions
-	checkWorkerHealth(reg, state, store)
+	checkWorkerHealth(ctx, reg, state, store, cfg)
 
 	// 0.5. Recovery - check for misplaced tasks (done with unmerged branches)
 	// This catches tasks that workers incorrectly moved to done
@@ -1048,7 +1081,7 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 	checkCompletedWorkers(store, reg, state, cfg.workDir)
 
 	// 2. Analyze tasks - check for stuck/abandoned tasks that need requeuing
-	analyzeAndRequeueTasks(store, reg, state, cfg)
+	analyzeAndRequeueTasks(ctx, store, reg, state, cfg)
 
 	// 3. Check leader sessions
 	if cfg.withLeaders {
@@ -1060,7 +1093,7 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 
 	// 5. Assign idle workers to todo tasks
 	if cfg.autoAssign {
-		assignTasks(store, reg, state, cfg)
+		assignTasks(ctx, store, reg, state, cfg)
 	}
 
 	// 6. Run leader workflow if enabled
@@ -1174,7 +1207,7 @@ func checkStaleReviewTasks(store *kanban.Store, state *supervisorState) {
 }
 
 // analyzeAndRequeueTasks checks for tasks that are stuck or abandoned and requeues them
-func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
+func analyzeAndRequeueTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
 	if !cfg.autoRequeue {
 		return
 	}
@@ -1248,6 +1281,13 @@ func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *su
 					fmt.Printf("   ✅ Moved back to Todo\n")
 					delete(state.taskStarted, task.ID)
 					delete(state.taskWorkers, task.ID)
+
+					// Dispatch task_failed webhook
+					if cfg.webhookDispatcher != nil {
+						reason := fmt.Sprintf("stuck without worker for %s", timeInProgress.Round(time.Second))
+						event := webhooks.NewTaskFailedEvent(task.ID, task.Title, reason, "", webhooks.Priority(task.Priority))
+						cfg.webhookDispatcher.Dispatch(ctx, event)
+					}
 				}
 			}
 		}
@@ -1329,7 +1369,7 @@ func checkForNewTasks(store *kanban.Store, reg *worker.Registry, state *supervis
 
 	prompt := buildTaskAnalyzerPrompt(board, workDir)
 	state.lastAnalysis = time.Now()
-	startLeader(reg, analyzer, &state.analyzer, workDir, prompt, leader.PromiseAnalyzer)
+	startLeader(reg, analyzer, &state.analyzer, workDir, prompt, leader.PromiseAnalyzer, cfg.webhookDispatcher)
 }
 
 func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
@@ -1592,7 +1632,7 @@ Respond with ONLY one line: either "NO_POKE: reason" or "POKE: reason"`,
 	return false, "unclear assessment"
 }
 
-func assignTasks(store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
+func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
 	// Count active development workers
 	activeWorkers := reg.List(worker.StatusActive)
 	activeCount := 0
@@ -1705,7 +1745,7 @@ func assignTasks(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 		state.workerTasks[w.ID] = task.ID
 
 		// Start worker (in goroutine to not block)
-		go func(w *worker.Worker, task *kanban.Issue, prompt, promise, worktree string) {
+		go func(w *worker.Worker, task *kanban.Issue, prompt, promise, worktree string, dispatcher *webhooks.Dispatcher) {
 			opts := worker.StartOptions{
 				TaskID:   task.ID,
 				Worktree: worktree,
@@ -1713,11 +1753,22 @@ func assignTasks(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 				Promise:  promise,
 			}
 
-			ctx := context.Background()
-			if err := worker.Start(ctx, reg, w.ID, opts); err != nil {
+			workerCtx := context.Background()
+			if err := worker.Start(workerCtx, reg, w.ID, opts); err != nil {
 				fmt.Printf("⚠️  Error starting %s: %v\n", w.DisplayName(), err)
+				// Dispatch worker_error webhook
+				if dispatcher != nil {
+					event := webhooks.NewWorkerErrorEvent(w.ID, w.DisplayName(), task.ID, err.Error())
+					dispatcher.Dispatch(workerCtx, event)
+				}
+			} else {
+				// Dispatch worker_started webhook
+				if dispatcher != nil {
+					event := webhooks.NewWorkerStartedEvent(w.ID, w.DisplayName(), task.ID, task.Title, worktree)
+					dispatcher.Dispatch(workerCtx, event)
+				}
 			}
-		}(w, task, prompt, promise, worktreePath)
+		}(w, task, prompt, promise, worktreePath, cfg.webhookDispatcher)
 
 		assigned++
 	}
@@ -1775,50 +1826,50 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	// 1. GROOMER: Run when there are items in backlog
 	if shouldStartLeader("groomer", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "groomer")
-		startGroomer(store, reg, state, workDir, board)
+		startGroomer(store, reg, state, workDir, board, cfg)
 	}
 
 	// 2. REVIEWER: Run when there are tasks in review
 	if shouldStartLeader("reviewer", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "reviewer")
-		startReviewer(store, reg, state, workDir, board)
+		startReviewer(store, reg, state, workDir, board, cfg)
 	}
 
 	// 3. PLANNER: Run when no work in progress and we need to plan
 	if shouldStartLeader("planner", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "planner")
-		startPlanner(store, reg, state, workDir, board)
+		startPlanner(store, reg, state, workDir, board, cfg)
 		return // Planner blocks other leaders
 	}
 
 	// 4. DEPLOY: Run when there are tasks in merge queue
 	if shouldStartLeader("deploy", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "deploy")
-		startDeploy(store, reg, state, workDir, board)
+		startDeploy(store, reg, state, workDir, board, cfg)
 	}
 
 	// 5. MONITOR: Run continuously to observe infrastructure health
 	if shouldStartLeader("monitor", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "monitor")
-		startMonitor(reg, state, workDir)
+		startMonitor(reg, state, workDir, cfg)
 	}
 
 	// 6. TESTER: Run when there's active work to test
 	if shouldStartLeader("tester", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "tester")
-		startTester(reg, state, workDir)
+		startTester(reg, state, workDir, cfg)
 	}
 
 	// 7. PM: Run when there are done tasks to analyze
 	if shouldStartLeader("pm", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "pm")
-		startPM(store, reg, state, workDir, board)
+		startPM(store, reg, state, workDir, board, cfg)
 	}
 
 	// 8. CICD: Run periodically to check CI health
 	if shouldStartLeader("cicd", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "cicd")
-		startCICD(reg, state, workDir)
+		startCICD(reg, state, workDir, cfg)
 	}
 
 	// Update lastMergeCount after all checks
@@ -1835,7 +1886,7 @@ func findIdleLeader(reg *worker.Registry, role worker.Role) *worker.Worker {
 	return nil
 }
 
-func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDir, prompt, promise string) {
+func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDir, prompt, promise string, dispatcher *webhooks.Dispatcher) {
 	ls.running = true
 	ls.sessionID = w.TmuxSessionName()
 	ls.startedAt = time.Now()
@@ -1858,6 +1909,12 @@ func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDi
 	} else if w.Role == worker.RoleMerge || w.Role == worker.RoleDeploy {
 		// Merge and deploy work in main git repo (need to push to main)
 		fmt.Printf("   📂 Working in git repo: %s\n", leaderWorkDir)
+	}
+
+	// Dispatch leader_launched webhook
+	if dispatcher != nil {
+		event := webhooks.NewLeaderLaunchedEvent(string(w.Role), w.ID, w.DisplayName(), ls.sessionID)
+		dispatcher.Dispatch(context.Background(), event)
 	}
 
 	go func() {
@@ -1887,7 +1944,7 @@ func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDi
 	}()
 }
 
-func startReviewer(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startReviewer(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleReviewer)
 	if w == nil {
 		fmt.Printf("⚠️  Review queue has items but no idle reviewer worker\n")
@@ -1912,10 +1969,10 @@ func startReviewer(store *kanban.Store, reg *worker.Registry, state *supervisorS
 		prompt = buildReviewerPrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.reviewer, workDir, prompt, leader.PromiseReviewer)
+	startLeader(reg, w, &state.reviewer, workDir, prompt, leader.PromiseReviewer, cfg.webhookDispatcher)
 }
 
-func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RolePlanner)
 	if w == nil {
 		fmt.Printf("⚠️  Backlog needs planning but no idle planner worker\n")
@@ -1940,10 +1997,10 @@ func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 		prompt = buildPlannerPrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.planner, workDir, prompt, leader.PromisePlanner)
+	startLeader(reg, w, &state.planner, workDir, prompt, leader.PromisePlanner, cfg.webhookDispatcher)
 }
 
-func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleMerge)
 	if w == nil {
 		fmt.Printf("⚠️  All tasks done but no idle merge worker\n")
@@ -1968,10 +2025,10 @@ func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorStat
 		prompt = buildMergePrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.merge, workDir, prompt, leader.PromiseMerge)
+	startLeader(reg, w, &state.merge, workDir, prompt, leader.PromiseMerge, cfg.webhookDispatcher)
 }
 
-func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleDeploy)
 	if w == nil {
 		fmt.Printf("⚠️  Merge complete but no idle deploy worker\n")
@@ -1996,10 +2053,27 @@ func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 		prompt = buildDeployPrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.deploy, workDir, prompt, leader.PromiseDeploy)
+	// Dispatch deployment_triggered webhook with task info
+	if cfg.webhookDispatcher != nil {
+		var taskIDs []string
+		var taskCount int
+		for _, col := range board.Columns {
+			if col.Status == kanban.StatusMerge {
+				taskCount = len(col.Issues)
+				for _, issue := range col.Issues {
+					taskIDs = append(taskIDs, issue.ID)
+				}
+				break
+			}
+		}
+		event := webhooks.NewDeploymentTriggeredEvent(w.ID, w.DisplayName(), w.TmuxSessionName(), taskCount, taskIDs)
+		cfg.webhookDispatcher.Dispatch(context.Background(), event)
+	}
+
+	startLeader(reg, w, &state.deploy, workDir, prompt, leader.PromiseDeploy, cfg.webhookDispatcher)
 }
 
-func startGroomer(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startGroomer(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleGroomer)
 	if w == nil {
 		fmt.Printf("⚠️  Backlog has items but no idle groomer worker\n")
@@ -2024,10 +2098,10 @@ func startGroomer(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 		prompt = buildGroomerPrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.groomer, workDir, prompt, leader.PromiseGroomer)
+	startLeader(reg, w, &state.groomer, workDir, prompt, leader.PromiseGroomer, cfg.webhookDispatcher)
 }
 
-func startMonitor(reg *worker.Registry, state *supervisorState, workDir string) {
+func startMonitor(reg *worker.Registry, state *supervisorState, workDir string, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleMonitor)
 	if w == nil {
 		// Monitor is optional - don't warn if not configured
@@ -2049,10 +2123,10 @@ func startMonitor(reg *worker.Registry, state *supervisorState, workDir string) 
 		prompt = buildMonitorPrompt(workDir)
 	}
 
-	startLeader(reg, w, &state.monitor, workDir, prompt, leader.PromiseMonitor)
+	startLeader(reg, w, &state.monitor, workDir, prompt, leader.PromiseMonitor, cfg.webhookDispatcher)
 }
 
-func startTester(reg *worker.Registry, state *supervisorState, workDir string) {
+func startTester(reg *worker.Registry, state *supervisorState, workDir string, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleTester)
 	if w == nil {
 		// Tester is optional - don't warn if not configured
@@ -2074,10 +2148,10 @@ func startTester(reg *worker.Registry, state *supervisorState, workDir string) {
 		prompt = buildTesterPrompt(workDir)
 	}
 
-	startLeader(reg, w, &state.tester, workDir, prompt, leader.PromiseTester)
+	startLeader(reg, w, &state.tester, workDir, prompt, leader.PromiseTester, cfg.webhookDispatcher)
 }
 
-func startPM(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+func startPM(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RolePM)
 	if w == nil {
 		// PM is optional - don't warn if not configured
@@ -2102,10 +2176,10 @@ func startPM(store *kanban.Store, reg *worker.Registry, state *supervisorState, 
 		prompt = buildPMPrompt(board, workDir)
 	}
 
-	startLeader(reg, w, &state.pm, workDir, prompt, leader.PromisePM)
+	startLeader(reg, w, &state.pm, workDir, prompt, leader.PromisePM, cfg.webhookDispatcher)
 }
 
-func startCICD(reg *worker.Registry, state *supervisorState, workDir string) {
+func startCICD(reg *worker.Registry, state *supervisorState, workDir string, cfg supervisorConfig) {
 	w := findIdleLeader(reg, worker.RoleCICD)
 	if w == nil {
 		// CICD is optional - don't warn if not configured
@@ -2127,7 +2201,7 @@ func startCICD(reg *worker.Registry, state *supervisorState, workDir string) {
 		prompt = buildCICDPrompt(workDir)
 	}
 
-	startLeader(reg, w, &state.cicd, workDir, prompt, leader.PromiseCICD)
+	startLeader(reg, w, &state.cicd, workDir, prompt, leader.PromiseCICD, cfg.webhookDispatcher)
 }
 
 // Prompt builders for each leader role
@@ -3556,7 +3630,7 @@ type smartAction struct {
 
 // runSmartCycle runs an AI-powered supervisor cycle.
 // Instead of fixed rules, it uses Haiku to analyze state and decide actions.
-func runSmartCycle(cfg supervisorConfig, state *supervisorState) {
+func runSmartCycle(ctx context.Context, cfg supervisorConfig, state *supervisorState) {
 	now := time.Now().Format("15:04:05")
 	fmt.Printf("\n━━━ Smart Cycle %s ━━━\n", now)
 
@@ -3576,7 +3650,7 @@ func runSmartCycle(cfg supervisorConfig, state *supervisorState) {
 	}
 
 	// Health check - detect stale workers (always do this, not AI-controlled)
-	checkWorkerHealth(reg, state, store)
+	checkWorkerHealth(ctx, reg, state, store, cfg)
 
 	// Recovery - check for misplaced tasks (always do this)
 	recoverMisplacedTasks(store, state, cfg.workDir)
@@ -3863,35 +3937,35 @@ func executeSmartAction(action smartAction, store *kanban.Store, reg *worker.Reg
 			return
 		}
 		board, _ := store.GetBoard()
-		startReviewer(store, reg, state, cfg.workDir, board)
+		startReviewer(store, reg, state, cfg.workDir, board, cfg)
 
 	case "start_groomer":
 		if !cfg.withLeaders || state.groomer.running {
 			return
 		}
 		board, _ := store.GetBoard()
-		startGroomer(store, reg, state, cfg.workDir, board)
+		startGroomer(store, reg, state, cfg.workDir, board, cfg)
 
 	case "start_planner":
 		if !cfg.withLeaders || state.planner.running {
 			return
 		}
 		board, _ := store.GetBoard()
-		startPlanner(store, reg, state, cfg.workDir, board)
+		startPlanner(store, reg, state, cfg.workDir, board, cfg)
 
 	case "start_merge":
 		if !cfg.withLeaders || state.merge.running {
 			return
 		}
 		board, _ := store.GetBoard()
-		startMerge(store, reg, state, cfg.workDir, board)
+		startMerge(store, reg, state, cfg.workDir, board, cfg)
 
 	case "start_deploy":
 		if !cfg.withLeaders || state.deploy.running {
 			return
 		}
 		board, _ := store.GetBoard()
-		startDeploy(store, reg, state, cfg.workDir, board)
+		startDeploy(store, reg, state, cfg.workDir, board, cfg)
 
 	default:
 		fmt.Printf("   ⚠️  Unknown action: %s\n", action.Action)
