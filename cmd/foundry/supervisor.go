@@ -1157,6 +1157,9 @@ func runCycle(ctx context.Context, cfg supervisorConfig, state *supervisorState)
 	// 1. Check for completed workers and update tasks
 	checkCompletedWorkers(store, reg, state, cfg.workDir)
 
+	// 1a. Track PRs for active tasks
+	checkTaskPRs(reg, state)
+
 	// 2. Analyze tasks - check for stuck/abandoned tasks that need requeuing
 	analyzeAndRequeueTasks(ctx, store, reg, state, cfg)
 

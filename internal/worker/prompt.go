@@ -134,7 +134,7 @@ func WorkingGuidelines(w *Worker) string {
 	sb.WriteString("1. **First commit**: Create draft PR immediately\n")
 	sb.WriteString("   ```bash\n")
 	sb.WriteString("   # After initial scaffolding or first meaningful change\n")
-	sb.WriteString("   git add -A && git commit -m \"WIP: start <task>\"\n")
+	sb.WriteString("   git add . && git commit -m \"WIP: start <task>\"\n")
 	sb.WriteString("   git push -u origin $(git branch --show-current)\n")
 	sb.WriteString("   gh pr create --draft --title \"WIP: <task title>\" --body \"Task: <task-id>\"\n")
 	sb.WriteString("   ```\n\n")
