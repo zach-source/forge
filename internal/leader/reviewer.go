@@ -1,6 +1,11 @@
 package leader
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/zach-source/forge/internal/github"
+)
 
 // ReviewerPrompt generates the prompt for the reviewer leader.
 func ReviewerPrompt(databaseID, workDir, branch string) string {
@@ -174,6 +179,28 @@ Start by:
 4. Beginning systematic review
 
 Report what you find and create issues as needed.`, databaseID, workDir, branch, branch, branch, branch, OutputFormat, HandoffProtocol)
+}
+
+// DraftPRSection generates a prompt section listing draft PRs for early feedback.
+// Returns empty string if there are no draft PRs.
+func DraftPRSection(draftPRs []github.PRState) string {
+	if len(draftPRs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Draft PRs (Early Feedback)\n\n")
+	sb.WriteString("These PRs are in progress. Provide guidance, not blocking feedback:\n")
+	sb.WriteString("- Leave inline comments via `gh pr comment <number> --body \"<feedback>\"`\n")
+	sb.WriteString("- Focus on architectural direction and early course corrections\n")
+	sb.WriteString("- Do NOT block or reject draft PRs\n\n")
+
+	for _, pr := range draftPRs {
+		sb.WriteString(fmt.Sprintf("- **#%d** %s (branch: %s) - %s\n", pr.Number, pr.Title, pr.Branch, pr.URL))
+	}
+	sb.WriteString("\n")
+
+	return sb.String()
 }
 
 // ReviewerPromise returns the completion promise for reviewer.

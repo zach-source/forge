@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/complexity"
 	"github.com/zach-source/forge/internal/detector"
+	"github.com/zach-source/forge/internal/github"
 	"github.com/zach-source/forge/internal/health"
 	"github.com/zach-source/forge/internal/kanban"
 	"github.com/zach-source/forge/internal/leader"
@@ -271,6 +272,9 @@ type supervisorState struct {
 	failureTracker  *health.FailureTracker
 	apiErrorTracker *health.APIErrorTracker
 	lastHealth      *health.Metrics
+
+	// PR tracking
+	taskPRs map[string]int // task ID -> PR number
 }
 
 // LeaderTrigger defines when a leader should be activated.
@@ -613,6 +617,7 @@ func newSupervisorState() *supervisorState {
 		leaderLastRun:        make(map[string]time.Time),
 		failureTracker:       health.NewFailureTracker(10),
 		apiErrorTracker:      health.NewAPIErrorTracker(5 * time.Minute),
+		taskPRs:              make(map[string]int),
 	}
 }
 
@@ -1717,6 +1722,34 @@ Respond with ONLY one line: either "NO_POKE: reason" or "POKE: reason"`,
 	return false, "unclear assessment"
 }
 
+// checkTaskPRs checks for PRs associated with active task branches and tracks their state.
+func checkTaskPRs(reg *worker.Registry, state *supervisorState) {
+	for taskID, workerID := range state.taskWorkers {
+		// Skip if we already know this task's PR
+		if _, known := state.taskPRs[taskID]; known {
+			continue
+		}
+
+		w := reg.Get(workerID)
+		if w == nil {
+			continue
+		}
+
+		branch := "task/" + extractTaskSuffix(taskID)
+		pr, err := github.GetPRForBranch(branch)
+		if err != nil {
+			continue // no PR yet
+		}
+
+		state.taskPRs[taskID] = pr.Number
+		if pr.Draft {
+			fmt.Printf("   📝 Task %s has draft PR #%d\n", taskID, pr.Number)
+		} else {
+			fmt.Printf("   📝 Task %s has PR #%d (ready for review)\n", taskID, pr.Number)
+		}
+	}
+}
+
 func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
 	// Count active development workers and calculate complexity load
 	activeWorkers := reg.List(worker.StatusActive)
@@ -2399,6 +2432,10 @@ func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("foundry task move blocks-forge-abc m   # Move to merge if approved\n")
 	sb.WriteString("```\n\n")
 
+	// Include draft PRs for early feedback
+	draftPRs, _ := github.ListDraftPRs()
+	sb.WriteString(leader.DraftPRSection(draftPRs))
+
 	sb.WriteString("## Continuous Operation (Ralph Loop)\n\n")
 	sb.WriteString("You run CONTINUOUSLY until all review items are processed:\n")
 	sb.WriteString("1. For each task above, review AND move it\n")
@@ -2434,6 +2471,10 @@ func buildReviewQueueSection(board *kanban.Board, workDir string) string {
 	if reviewCount == 0 {
 		sb.WriteString("(no tasks in review - you may output the completion promise)\n")
 	}
+
+	// Include draft PRs for early feedback
+	draftPRs, _ := github.ListDraftPRs()
+	sb.WriteString(leader.DraftPRSection(draftPRs))
 
 	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", workDir))
 	sb.WriteString(fmt.Sprintf("\nWhen review queue is EMPTY, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseReviewer))
