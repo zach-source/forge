@@ -213,7 +213,8 @@ func FormatState(state *State) (string, error) {
 }
 
 // DefaultSessionsDir returns the default directory for session state files.
-func DefaultSessionsDir() string {
+// This is a variable so it can be overridden in tests.
+var DefaultSessionsDir = func() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".forge", "sessions")
 }

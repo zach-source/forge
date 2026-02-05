@@ -22,6 +22,7 @@ use the foundry CLI.
 
 Commands:
   forge start <prompt>   Start a Claude session
+  forge resume [id]      Resume an interrupted session
   forge attach [id]      Attach to a session's tmux
   forge status [id]      Show session status
   forge cancel [id]      Cancel a session
@@ -33,6 +34,7 @@ Commands:
 	// Session commands only
 	rootCmd.AddCommand(
 		newStartCmd(),
+		newResumeCmd(),
 		newAttachCmd(),
 		newStatusCmd(),
 		newCancelCmd(),
