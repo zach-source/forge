@@ -3,6 +3,8 @@ package worker
 import (
 	"strings"
 	"testing"
+
+	"github.com/zach-source/forge/internal/context"
 )
 
 func TestWorkerIdentityPrompt(t *testing.T) {
@@ -62,5 +64,133 @@ func TestWorkerPromise(t *testing.T) {
 				t.Errorf("WorkerPromise() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskPromptWithLearnings(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a learnings store with test data
+	store := context.NewStore()
+	store.Add(context.Learning{
+		Summary:  "Worker registry deadlock fix",
+		Problem:  "Concurrent access caused deadlock",
+		Solution: "Use RWMutex instead of Mutex",
+		Keywords: []string{"worker", "registry", "deadlock"},
+		Files:    []string{"internal/worker/registry.go"},
+	})
+	if err := store.Save(tmpDir); err != nil {
+		t.Fatalf("Failed to save test learnings: %v", err)
+	}
+
+	w := &Worker{
+		ID:   "w-test123",
+		Name: "alpha",
+		Role: RoleWorker,
+	}
+
+	opts := TaskPromptOptions{
+		WorkspaceDir: tmpDir,
+		TaskID:       "task-456",
+		Title:        "Fix worker registry bug",
+		Description:  "There's a bug in the worker registry causing issues",
+	}
+
+	prompt := TaskPromptWithLearnings(w, opts)
+
+	// Should contain identity
+	if !strings.Contains(prompt, "**alpha**") {
+		t.Error("Prompt should contain worker name")
+	}
+
+	// Should contain task
+	if !strings.Contains(prompt, "task-456") {
+		t.Error("Prompt should contain task ID")
+	}
+
+	// Should contain learnings section
+	if !strings.Contains(prompt, "Relevant Learnings") {
+		t.Error("Prompt should contain relevant learnings section")
+	}
+
+	// Should contain the relevant learning
+	if !strings.Contains(prompt, "Worker registry deadlock fix") {
+		t.Error("Prompt should contain the relevant learning about registry")
+	}
+
+	// Should contain guidelines
+	if !strings.Contains(prompt, "Working Guidelines") {
+		t.Error("Prompt should contain working guidelines")
+	}
+}
+
+func TestTaskPromptWithLearningsNoMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a learnings store with unrelated data
+	store := context.NewStore()
+	store.Add(context.Learning{
+		Summary:  "Tmux session cleanup",
+		Problem:  "Sessions not cleaned up",
+		Solution: "Add defer cleanup",
+		Keywords: []string{"tmux", "session", "cleanup"},
+	})
+	if err := store.Save(tmpDir); err != nil {
+		t.Fatalf("Failed to save test learnings: %v", err)
+	}
+
+	w := &Worker{
+		ID:   "w-test123",
+		Name: "bravo",
+		Role: RoleWorker,
+	}
+
+	opts := TaskPromptOptions{
+		WorkspaceDir: tmpDir,
+		TaskID:       "task-789",
+		Title:        "Update pricing page",
+		Description:  "Change subscription rates",
+	}
+
+	prompt := TaskPromptWithLearnings(w, opts)
+
+	// Should NOT contain learnings section (no match)
+	if strings.Contains(prompt, "Relevant Learnings") {
+		t.Error("Prompt should not contain learnings section when no matches")
+	}
+
+	// Should still contain identity and guidelines
+	if !strings.Contains(prompt, "**bravo**") {
+		t.Error("Prompt should contain worker name")
+	}
+	if !strings.Contains(prompt, "Working Guidelines") {
+		t.Error("Prompt should contain working guidelines")
+	}
+}
+
+func TestTaskPromptWithLearningsNoWorkspace(t *testing.T) {
+	w := &Worker{
+		ID:   "w-test123",
+		Name: "charlie",
+		Role: RoleWorker,
+	}
+
+	opts := TaskPromptOptions{
+		WorkspaceDir: "", // No workspace
+		TaskID:       "task-000",
+		Title:        "Some task",
+		Description:  "Some description",
+	}
+
+	prompt := TaskPromptWithLearnings(w, opts)
+
+	// Should NOT contain learnings section (no workspace)
+	if strings.Contains(prompt, "Relevant Learnings") {
+		t.Error("Prompt should not contain learnings section when no workspace")
+	}
+
+	// Should still contain basic prompt
+	if !strings.Contains(prompt, "**charlie**") {
+		t.Error("Prompt should contain worker name")
 	}
 }

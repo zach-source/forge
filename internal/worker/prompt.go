@@ -3,6 +3,8 @@ package worker
 import (
 	"fmt"
 	"strings"
+
+	"github.com/zach-source/forge/internal/context"
 )
 
 // WorkerIdentityPrompt generates the identity section to prepend to worker prompts.
@@ -69,6 +71,44 @@ func TaskPrompt(w *Worker, task, description string) string {
 	sb.WriteString("\n---\n\n")
 	sb.WriteString("## Task\n\n")
 	sb.WriteString(description)
+	sb.WriteString("\n")
+
+	sb.WriteString(WorkingGuidelines(w))
+
+	return sb.String()
+}
+
+// TaskPromptOptions configures task prompt generation.
+type TaskPromptOptions struct {
+	WorkspaceDir string // Workspace directory for loading learnings
+	TaskID       string // Task identifier
+	Title        string // Task title for keyword matching
+	Description  string // Task description
+}
+
+// TaskPromptWithLearnings generates a task prompt with relevant learnings injected.
+func TaskPromptWithLearnings(w *Worker, opts TaskPromptOptions) string {
+	var sb strings.Builder
+
+	identity := WorkerIdentityPrompt(w, opts.TaskID, "")
+	sb.WriteString(identity)
+
+	// Inject relevant learnings if workspace provided
+	if opts.WorkspaceDir != "" {
+		learningsSection := context.BuildContextSection(
+			opts.WorkspaceDir,
+			opts.Title,
+			opts.Description,
+		)
+		if learningsSection != "" {
+			sb.WriteString("\n---\n")
+			sb.WriteString(learningsSection)
+		}
+	}
+
+	sb.WriteString("\n---\n\n")
+	sb.WriteString("## Task\n\n")
+	sb.WriteString(opts.Description)
 	sb.WriteString("\n")
 
 	sb.WriteString(WorkingGuidelines(w))
