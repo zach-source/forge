@@ -391,9 +391,9 @@ func TestRemoveRepo(t *testing.T) {
 		}
 
 		// Add three repos
-		ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
-		ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
-		ws.AddRepo(Repo{Name: "repo-c", Path: "/c"})
+		_ = ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
+		_ = ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
+		_ = ws.AddRepo(Repo{Name: "repo-c", Path: "/c"})
 
 		// Remove middle one
 		if err := ws.RemoveRepo("repo-b"); err != nil {
@@ -418,7 +418,7 @@ func TestGetRepo(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "my-repo", Path: "/path", Remote: "https://example.com"})
+		_ = ws.AddRepo(Repo{Name: "my-repo", Path: "/path", Remote: "https://example.com"})
 
 		repo := ws.GetRepo("my-repo")
 		if repo == nil {
@@ -456,8 +456,8 @@ func TestSetPrimary(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
-		ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
+		_ = ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
+		_ = ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
 
 		if err := ws.SetPrimary("repo-b"); err != nil {
 			t.Fatalf("SetPrimary() error = %v", err)
@@ -479,14 +479,14 @@ func TestSetPrimary(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
-		ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
+		_ = ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
+		_ = ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
 
 		// Set first as primary
-		ws.SetPrimary("repo-a")
+		_ = ws.SetPrimary("repo-a")
 
 		// Set second as primary
-		ws.SetPrimary("repo-b")
+		_ = ws.SetPrimary("repo-b")
 
 		if ws.Repos[0].IsPrimary {
 			t.Error("repo-a should no longer be primary")
@@ -520,9 +520,9 @@ func TestPrimaryRepo(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
-		ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
-		ws.SetPrimary("repo-b")
+		_ = ws.AddRepo(Repo{Name: "repo-a", Path: "/a"})
+		_ = ws.AddRepo(Repo{Name: "repo-b", Path: "/b"})
+		_ = ws.SetPrimary("repo-b")
 
 		primary := ws.PrimaryRepo()
 		if primary == nil {
@@ -541,8 +541,8 @@ func TestPrimaryRepo(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "first-repo", Path: "/first"})
-		ws.AddRepo(Repo{Name: "second-repo", Path: "/second"})
+		_ = ws.AddRepo(Repo{Name: "first-repo", Path: "/first"})
+		_ = ws.AddRepo(Repo{Name: "second-repo", Path: "/second"})
 
 		primary := ws.PrimaryRepo()
 		if primary == nil {
@@ -577,7 +577,7 @@ func TestUpdateRepo(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "my-repo", Path: "/path"})
+		_ = ws.AddRepo(Repo{Name: "my-repo", Path: "/path"})
 
 		err = ws.UpdateRepo("my-repo", func(r *Repo) {
 			r.Summary = "A test repository"
@@ -620,8 +620,8 @@ func TestUpdateRepo(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.AddRepo(Repo{Name: "my-repo", Path: "/path"})
-		ws.UpdateRepo("my-repo", func(r *Repo) {
+		_ = ws.AddRepo(Repo{Name: "my-repo", Path: "/path"})
+		_ = ws.UpdateRepo("my-repo", func(r *Repo) {
 			r.DevBranch = "develop"
 		})
 

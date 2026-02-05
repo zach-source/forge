@@ -36,7 +36,7 @@ Example:
 
 			// Also check local directory
 			wd, _ := os.Getwd()
-			mgr.DiscoverLocal(wd)
+			_ = mgr.DiscoverLocal(wd)
 
 			var sessionID string
 
@@ -122,7 +122,7 @@ func tailLines(path string, n int) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read all lines and keep last n
 	var allLines []string
@@ -160,10 +160,10 @@ func tailFollow(path string) error {
 			return err
 		}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Seek to end
-	f.Seek(0, io.SeekEnd)
+	_, _ = f.Seek(0, io.SeekEnd)
 
 	fmt.Printf("Following %s (Ctrl+C to stop)...\n\n", path)
 
@@ -171,7 +171,7 @@ func tailFollow(path string) error {
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			os.Stdout.Write(buf[:n])
+			_, _ = os.Stdout.Write(buf[:n])
 		}
 		if err != nil && err != io.EOF {
 			return err

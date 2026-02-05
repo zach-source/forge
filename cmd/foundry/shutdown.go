@@ -110,7 +110,7 @@ func runShutdown(force bool) error {
 				if strings.HasPrefix(session, prefix) {
 					s := tmux.NewSession(session, "", "")
 					if s.Exists() {
-						s.Kill()
+						_ = s.Kill()
 						fmt.Printf("   ✅ Killed tmux: %s\n", session)
 						stopped++
 					}

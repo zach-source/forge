@@ -149,7 +149,7 @@ func TestRotatingWriter_ManualRotate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Write some data
 	if _, err := w.Write([]byte("test data\n")); err != nil {
@@ -208,7 +208,7 @@ func TestRotatingWriter_CompressesRotatedFiles(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 
-	w.Close()
+	_ = w.Close()
 
 	// Wait for compression to complete (runs async)
 	time.Sleep(500 * time.Millisecond)
@@ -274,7 +274,7 @@ func TestRotatingWriter_CleansUpOldBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Trigger multiple rotations
 	data := bytes.Repeat([]byte("x"), 30)
@@ -316,7 +316,7 @@ func TestRotatingWriter_ZeroOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Verify defaults were applied
 	if w.opts.MaxSize != DefaultMaxSize {
@@ -335,7 +335,7 @@ func TestRotatingWriter_ConcurrentWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter() error = %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Concurrent writes should be safe
 	done := make(chan bool, 10)
@@ -393,13 +393,13 @@ func TestCompressFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening gzip file: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatalf("creating gzip reader: %v", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	decompressed, err := io.ReadAll(gz)
 	if err != nil {
@@ -425,7 +425,7 @@ func setupTestDir(t *testing.T) (string, func()) {
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return tmpDir, cleanup

@@ -110,7 +110,7 @@ func Start(ctx context.Context, reg *Registry, workerID string, opts StartOption
 	a, err := agent.New(cfg)
 	if err != nil {
 		// Rollback state
-		reg.Update(workerID, func(w *Worker) {
+		_ = reg.Update(workerID, func(w *Worker) {
 			w.Status = StatusIdle
 			w.SessionID = ""
 			w.CurrentTask = ""
@@ -211,7 +211,7 @@ func Stop(reg *Registry, workerID string) error {
 
 	// Release lock if single-threaded role
 	if w.Role.IsSingleThreaded() {
-		ReleaseLock(string(w.Role), w.ID)
+		_ = ReleaseLock(string(w.Role), w.ID)
 	}
 
 	// Update state

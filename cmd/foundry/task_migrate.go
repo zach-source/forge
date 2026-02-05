@@ -100,7 +100,7 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("opening legacy database: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			// Read all issues
 			issues, err := readLegacyIssues(db)
@@ -205,7 +205,7 @@ func readLegacyIssues(db *sql.DB) ([]*legacyIssue, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var issues []*legacyIssue
 	for rows.Next() {

@@ -12,7 +12,7 @@ func TestRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	regPath := filepath.Join(tmpDir, "registry.yaml")
 
@@ -109,7 +109,7 @@ func TestRegistry(t *testing.T) {
 	}
 
 	// Reset and delete
-	reg.Update("alpha", func(w *Worker) {
+	_ = reg.Update("alpha", func(w *Worker) {
 		w.Status = StatusIdle
 	})
 	err = reg.Delete("alpha")
@@ -142,12 +142,12 @@ func TestRegistryFindByWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	reg, _ := LoadRegistryFrom(filepath.Join(tmpDir, "registry.yaml"))
 
 	w, _ := reg.Create(RoleWorker, "")
-	reg.Update(w.ID, func(w *Worker) {
+	_ = reg.Update(w.ID, func(w *Worker) {
 		w.Worktree = "/path/to/worktree"
 	})
 

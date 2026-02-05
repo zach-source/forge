@@ -23,7 +23,7 @@ func TestShowStatusSummaryEmpty(t *testing.T) {
 
 	err := showStatusSummary(mgr)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -31,7 +31,7 @@ func TestShowStatusSummaryEmpty(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	if !strings.Contains(output, "No forge sessions found") {
@@ -64,7 +64,7 @@ func TestShowStatusSummaryWithSessions(t *testing.T) {
 
 	err := showStatusSummary(mgr)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -72,7 +72,7 @@ func TestShowStatusSummaryWithSessions(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	// Verify output contains expected elements
@@ -111,7 +111,7 @@ func TestShowStatusSummaryLongPromise(t *testing.T) {
 
 	err := showStatusSummary(mgr)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -119,7 +119,7 @@ func TestShowStatusSummaryLongPromise(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	// Long promises should be truncated with "..."
@@ -168,7 +168,7 @@ func TestShowDetailedStatusWithState(t *testing.T) {
 
 	err := showDetailedStatus(mgr, "detailed-test")
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -176,7 +176,7 @@ func TestShowDetailedStatusWithState(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	// Verify detailed output contains expected elements
@@ -217,7 +217,7 @@ func TestShowDetailedStatusNoState(t *testing.T) {
 
 	err := showDetailedStatus(mgr, "no-state-test")
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	if err != nil {
@@ -225,7 +225,7 @@ func TestShowDetailedStatusNoState(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	// Should still show basic info
@@ -256,11 +256,11 @@ func TestCancelSessionWithForce(t *testing.T) {
 
 	err := cancelSession(fakeID, true)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	// Should complete without error (tmux session won't exist)

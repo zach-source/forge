@@ -208,11 +208,11 @@ func TestPrintBanner(t *testing.T) {
 
 			printBanner(tt.role)
 
-			w.Close()
+			_ = w.Close()
 			os.Stdout = oldStdout
 
 			var buf bytes.Buffer
-			io.Copy(&buf, r)
+			_, _ = io.Copy(&buf, r)
 			output := buf.String()
 
 			for _, want := range tt.wantContains {

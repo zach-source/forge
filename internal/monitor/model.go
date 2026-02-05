@@ -293,8 +293,8 @@ func (m Model) tick() tea.Cmd {
 // refreshAll fetches all data.
 func (m Model) refreshAll() tea.Msg {
 	// Refresh sessions
-	m.sessions.Discover()
-	m.sessions.DiscoverLocal(m.workDir)
+	_ = m.sessions.Discover()
+	_ = m.sessions.DiscoverLocal(m.workDir)
 	sessions := m.sessions.List()
 
 	// Refresh workers
@@ -313,7 +313,7 @@ func (m Model) refreshAll() tea.Msg {
 	var board *kanban.Board
 	if store, err := kanban.NewStore(m.workDir); err == nil {
 		board, _ = store.GetBoard()
-		store.Close()
+		_ = store.Close()
 	}
 
 	// Refresh log entries
@@ -365,7 +365,7 @@ func readLastLines(path string, n int) []string {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
@@ -386,11 +386,11 @@ func readLastLines(path string, n int) []string {
 func (m *Model) cancelSession(id string) {
 	// Delete state file
 	statePath := ralph.SessionStatePath(id)
-	os.Remove(statePath)
+	_ = os.Remove(statePath)
 
 	// Kill tmux session
 	tmuxSession := tmux.NewSession(id, "", "")
-	tmuxSession.Kill()
+	_ = tmuxSession.Kill()
 }
 
 // doAttach returns a command that attaches to a tmux session.

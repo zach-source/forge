@@ -90,7 +90,7 @@ Example:
 	cmd.Flags().BoolVar(&noSkip, "no-skip", false, "Don't use --dangerously-skip-permissions")
 	cmd.Flags().StringVar(&sessionID, "id", "", "Custom session ID")
 
-	cmd.MarkFlagRequired("promise")
+	_ = cmd.MarkFlagRequired("promise")
 
 	return cmd
 }

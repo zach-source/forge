@@ -85,12 +85,12 @@ func (c *Configurator) Generate() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	encoder := json.NewEncoder(tmpFile)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(config); err != nil {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("encoding config: %w", err)
 	}
 

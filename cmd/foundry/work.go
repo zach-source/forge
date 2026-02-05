@@ -183,19 +183,19 @@ func newWorkListCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tREPO\tBRANCH\tSTATUS\tPATH")
-			fmt.Fprintln(w, "----\t----\t------\t------\t----")
+			_, _ = fmt.Fprintln(w, "NAME\tREPO\tBRANCH\tSTATUS\tPATH")
+			_, _ = fmt.Fprintln(w, "----\t----\t------\t------\t----")
 
 			for _, wt := range worktrees {
 				path := wt.Path
 				if len(path) > 40 {
 					path = "..." + path[len(path)-37:]
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 					wt.Name, wt.RepoName, wt.Branch, wt.Status, path)
 			}
 
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}

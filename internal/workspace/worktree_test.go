@@ -229,7 +229,7 @@ func TestRemoveWorktreeFromConfig(t *testing.T) {
 		}
 
 		// Add worktree
-		ws.saveWorktree(&Worktree{Name: "to-remove"})
+		_ = ws.saveWorktree(&Worktree{Name: "to-remove"})
 
 		// Remove it
 		if err := ws.removeWorktreeFromConfig("to-remove"); err != nil {
@@ -268,9 +268,9 @@ func TestListWorktrees(t *testing.T) {
 		}
 
 		// Add worktrees
-		ws.saveWorktree(&Worktree{Name: "wt-a", Status: "active"})
-		ws.saveWorktree(&Worktree{Name: "wt-b", Status: "merged"})
-		ws.saveWorktree(&Worktree{Name: "wt-c", Status: "active"})
+		_ = ws.saveWorktree(&Worktree{Name: "wt-a", Status: "active"})
+		_ = ws.saveWorktree(&Worktree{Name: "wt-b", Status: "merged"})
+		_ = ws.saveWorktree(&Worktree{Name: "wt-c", Status: "active"})
 
 		worktrees, err := ws.ListWorktrees()
 		if err != nil {
@@ -310,7 +310,7 @@ func TestGetWorktree(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.saveWorktree(&Worktree{
+		_ = ws.saveWorktree(&Worktree{
 			Name:     "my-worktree",
 			RepoName: "test-repo",
 			Branch:   "feature/test",
@@ -353,10 +353,10 @@ func TestActiveWorktrees(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.saveWorktree(&Worktree{Name: "active-1", Status: "active"})
-		ws.saveWorktree(&Worktree{Name: "merged-1", Status: "merged"})
-		ws.saveWorktree(&Worktree{Name: "active-2", Status: "active"})
-		ws.saveWorktree(&Worktree{Name: "abandoned", Status: "abandoned"})
+		_ = ws.saveWorktree(&Worktree{Name: "active-1", Status: "active"})
+		_ = ws.saveWorktree(&Worktree{Name: "merged-1", Status: "merged"})
+		_ = ws.saveWorktree(&Worktree{Name: "active-2", Status: "active"})
+		_ = ws.saveWorktree(&Worktree{Name: "abandoned", Status: "abandoned"})
 
 		active, err := ws.ActiveWorktrees()
 		if err != nil {
@@ -387,7 +387,7 @@ func TestUpdateWorktreeStatus(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.saveWorktree(&Worktree{Name: "my-wt", Status: "active"})
+		_ = ws.saveWorktree(&Worktree{Name: "my-wt", Status: "active"})
 
 		if err := ws.UpdateWorktreeStatus("my-wt", "merged"); err != nil {
 			t.Fatalf("UpdateWorktreeStatus() error = %v", err)
@@ -423,7 +423,7 @@ func TestLinkWorktreeToNotion(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.saveWorktree(&Worktree{Name: "my-wt"})
+		_ = ws.saveWorktree(&Worktree{Name: "my-wt"})
 
 		if err := ws.LinkWorktreeToNotion("my-wt", "notion-123"); err != nil {
 			t.Fatalf("LinkWorktreeToNotion() error = %v", err)
@@ -459,7 +459,7 @@ func TestLinkWorktreeToBead(t *testing.T) {
 			t.Fatalf("Init() error = %v", err)
 		}
 
-		ws.saveWorktree(&Worktree{Name: "my-wt"})
+		_ = ws.saveWorktree(&Worktree{Name: "my-wt"})
 
 		if err := ws.LinkWorktreeToBead("my-wt", "bead-456"); err != nil {
 			t.Fatalf("LinkWorktreeToBead() error = %v", err)

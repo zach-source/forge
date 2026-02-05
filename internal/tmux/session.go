@@ -32,13 +32,6 @@ func tmuxCmd(args ...string) *exec.Cmd {
 	return exec.Command("tmux", fullArgs...)
 }
 
-// tmuxCmdEnv creates an exec.Command for tmux with environment variables.
-func tmuxCmdEnv(env []string, args ...string) *exec.Cmd {
-	cmd := tmuxCmd(args...)
-	cmd.Env = append(os.Environ(), env...)
-	return cmd
-}
-
 // Session represents a tmux session for running a forge agent.
 type Session struct {
 	Name    string
@@ -89,7 +82,7 @@ func (s *Session) Create() error {
 
 		// Increase history-limit as safety net for scrollback
 		histCmd := tmuxCmd("set-option", "-t", s.Name, "history-limit", "50000")
-		histCmd.Run() // Non-fatal
+		_ = histCmd.Run() // Non-fatal
 	}
 
 	return nil
@@ -147,11 +140,11 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 	promptPath := promptFile.Name()
 
 	if _, err := promptFile.WriteString(prompt); err != nil {
-		promptFile.Close()
-		os.Remove(promptPath)
+		_ = promptFile.Close()
+		_ = os.Remove(promptPath)
 		return fmt.Errorf("writing prompt file: %w", err)
 	}
-	promptFile.Close()
+	_ = promptFile.Close()
 
 	// Build claude command (interactive mode, no -p flag)
 	var cmdParts []string

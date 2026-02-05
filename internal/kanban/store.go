@@ -236,7 +236,7 @@ func (s *Store) Move(id string, status Status) error {
 			return fmt.Errorf("bd close failed: %s", string(out))
 		}
 		// Remove any kanban: labels when closing
-		s.removeKanbanLabels(id)
+		_ = s.removeKanbanLabels(id)
 		return nil
 	}
 
@@ -283,7 +283,7 @@ func (s *Store) updateKanbanLabel(id string, status Status) error {
 		// Clear all labels if none remain
 		cmd := exec.Command("bd", "update", id, "--set-labels", "")
 		cmd.Dir = s.workDir
-		cmd.CombinedOutput() // Ignore error - some bd versions may not support empty labels
+		_, _ = cmd.CombinedOutput() // Ignore error - some bd versions may not support empty labels
 	}
 
 	return nil
@@ -315,7 +315,7 @@ func (s *Store) removeKanbanLabels(id string) error {
 		}
 		cmd := exec.Command("bd", "update", id, "--set-labels", labelArg)
 		cmd.Dir = s.workDir
-		cmd.CombinedOutput() // Best effort
+		_, _ = cmd.CombinedOutput() // Best effort
 	}
 
 	return nil

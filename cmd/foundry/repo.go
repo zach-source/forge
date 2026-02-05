@@ -167,11 +167,11 @@ func newRepoListCmd() *cobra.Command {
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 			if verbose {
-				fmt.Fprintln(w, "NAME\tTYPE\tBRANCH\tPATH\tREMOTE")
-				fmt.Fprintln(w, "----\t----\t------\t----\t------")
+				_, _ = fmt.Fprintln(w, "NAME\tTYPE\tBRANCH\tPATH\tREMOTE")
+				_, _ = fmt.Fprintln(w, "----\t----\t------\t----\t------")
 			} else {
-				fmt.Fprintln(w, "NAME\tTYPE\tBRANCH\tPATH")
-				fmt.Fprintln(w, "----\t----\t------\t----")
+				_, _ = fmt.Fprintln(w, "NAME\tTYPE\tBRANCH\tPATH")
+				_, _ = fmt.Fprintln(w, "----\t----\t------\t----")
 			}
 
 			for _, repo := range ws.Repos {
@@ -186,7 +186,7 @@ func newRepoListCmd() *cobra.Command {
 				}
 
 				if verbose {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 						name, repoType, repo.Branch, repo.Path, repo.Remote)
 				} else {
 					// Truncate path for display
@@ -194,12 +194,12 @@ func newRepoListCmd() *cobra.Command {
 					if len(path) > 40 {
 						path = "..." + path[len(path)-37:]
 					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 						name, repoType, repo.Branch, path)
 				}
 			}
 
-			w.Flush()
+			_ = w.Flush()
 
 			return nil
 		},

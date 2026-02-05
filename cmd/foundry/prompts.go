@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -121,7 +120,7 @@ func newPromptsListCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ROLE\tSTATUS\tPATH")
+			_, _ = fmt.Fprintln(w, "ROLE\tSTATUS\tPATH")
 
 			allRoles := leader.AllRoles()
 			for _, role := range allRoles {
@@ -136,10 +135,10 @@ func newPromptsListCmd() *cobra.Command {
 					status = "not initialized"
 					path = "-"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\n", role, status, path)
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", role, status, path)
 			}
 
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}
@@ -356,10 +355,4 @@ Use --all to reset all prompts.`,
 	cmd.Flags().BoolVarP(&all, "all", "a", false, "Reset all prompts")
 
 	return cmd
-}
-
-// getPromptsDir returns the prompts directory path for the current workspace.
-func getPromptsDir() string {
-	workDir, _ := os.Getwd()
-	return filepath.Join(workDir, ".forge", "prompts")
 }

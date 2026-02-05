@@ -32,7 +32,7 @@ Example:
 
 			// Also check local directory
 			wd, _ := os.Getwd()
-			mgr.DiscoverLocal(wd)
+			_ = mgr.DiscoverLocal(wd)
 
 			if len(args) > 0 {
 				sessionID = args[0]
@@ -58,7 +58,7 @@ func showStatusSummary(mgr *session.Manager) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "STATUS\tSESSION\tITERATION\tPROMISE\tELAPSED")
+	_, _ = fmt.Fprintln(w, "STATUS\tSESSION\tITERATION\tPROMISE\tELAPSED")
 
 	for _, s := range sessions {
 		promise := "-"
@@ -69,7 +69,7 @@ func showStatusSummary(mgr *session.Manager) error {
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			s.StatusIcon(),
 			s.ID,
 			s.IterationString(),
@@ -78,7 +78,7 @@ func showStatusSummary(mgr *session.Manager) error {
 		)
 	}
 
-	w.Flush()
+	_ = w.Flush()
 
 	// Summary
 	active := mgr.ActiveCount()

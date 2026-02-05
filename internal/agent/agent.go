@@ -103,7 +103,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("generating MCP config: %w", err)
 	}
 	a.mcpPath = mcpPath
-	defer os.Remove(mcpPath)
+	defer func() { _ = os.Remove(mcpPath) }()
 
 	// 4. Create tmux session
 	logFile := a.config.LogFile

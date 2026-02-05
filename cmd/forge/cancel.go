@@ -34,7 +34,7 @@ Example:
 
 			// Also check local directory
 			wd, _ := os.Getwd()
-			mgr.DiscoverLocal(wd)
+			_ = mgr.DiscoverLocal(wd)
 
 			var sessionID string
 
@@ -79,7 +79,7 @@ func cancelSession(id string, force bool) error {
 	if !force {
 		fmt.Printf("Cancel session %s? [y/N] ", id)
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Cancelled.")
 			return nil

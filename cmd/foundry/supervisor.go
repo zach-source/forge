@@ -1067,7 +1067,7 @@ func runCycle(ctx context.Context, cfg supervisorConfig, state *supervisorState)
 		fmt.Printf("⚠️  Error loading kanban: %v\n", err)
 		return
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Load worker registry
 	reg, err := worker.LoadRegistry()
@@ -1426,8 +1426,8 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 			workers := reg.List()
 			for _, w := range workers {
 				if w.Role == role && w.SessionID == finishedSessionID {
-					worker.Stop(reg, w.ID)
-					worker.Reset(reg, w.ID)
+					_ = worker.Stop(reg, w.ID)
+					_ = worker.Reset(reg, w.ID)
 					fmt.Printf("   ♻️  Reset %s to idle\n", w.DisplayName())
 					break
 				}
@@ -1584,13 +1584,13 @@ func runClaudeHaiku(prompt string) ([]byte, error) {
 		return nil, fmt.Errorf("creating prompt file: %w", err)
 	}
 	promptPath := promptFile.Name()
-	defer os.Remove(promptPath)
+	defer func() { _ = os.Remove(promptPath) }()
 
 	if _, err := promptFile.WriteString(prompt); err != nil {
-		promptFile.Close()
+		_ = promptFile.Close()
 		return nil, fmt.Errorf("writing prompt file: %w", err)
 	}
-	promptFile.Close()
+	_ = promptFile.Close()
 
 	// Run claude with prompt from file via shell
 	// Using shell to pipe file content to claude -p
@@ -1732,14 +1732,14 @@ func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry,
 			fmt.Printf("   ⚠️  Error creating worktree: %v\n", err)
 			fmt.Printf("   ⏭️  Skipping task (worktree required for parallel execution)\n")
 			// Move task back to todo so it can be retried
-			store.Move(task.ID, kanban.StatusTodo)
+			_ = store.Move(task.ID, kanban.StatusTodo)
 			continue
 		}
 
 		// Don't use main worktree for workers (would block other agents)
 		if worktreePath == cfg.workDir {
 			fmt.Printf("   ⏭️  Skipping task (would use shared worktree)\n")
-			store.Move(task.ID, kanban.StatusTodo)
+			_ = store.Move(task.ID, kanban.StatusTodo)
 			continue
 		}
 
@@ -1921,12 +1921,13 @@ func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDi
 	}
 
 	// Groomer, reviewer, planner, monitor, tester, pm use dedicated worktrees; merge, deploy work in main repo
-	if w.Role == worker.RoleGroomer || w.Role == worker.RoleReviewer || w.Role == worker.RolePlanner || w.Role == worker.RoleMonitor || w.Role == worker.RoleTester || w.Role == worker.RolePM {
+	switch w.Role {
+	case worker.RoleGroomer, worker.RoleReviewer, worker.RolePlanner, worker.RoleMonitor, worker.RoleTester, worker.RolePM:
 		if wt, err := createLeaderWorktree(workDir, string(w.Role)); err == nil {
 			leaderWorkDir = wt
 			fmt.Printf("   📁 Using worktree: %s\n", wt)
 		}
-	} else if w.Role == worker.RoleMerge || w.Role == worker.RoleDeploy {
+	case worker.RoleMerge, worker.RoleDeploy:
 		// Merge and deploy work in main git repo (need to push to main)
 		fmt.Printf("   📂 Working in git repo: %s\n", leaderWorkDir)
 	}
@@ -3508,7 +3509,7 @@ func createLeaderWorktree(baseDir, role string) (string, error) {
 	if _, err := os.Stat(worktreePath); err == nil {
 		// Already exists, reuse it - pull latest changes
 		pullCmd := exec.Command("git", "-C", worktreePath, "pull", "--rebase", "--autostash")
-		pullCmd.Run() // Ignore errors, best effort
+		_ = pullCmd.Run() // Ignore errors, best effort
 		return worktreePath, nil
 	}
 
@@ -3660,7 +3661,7 @@ func runSmartCycle(ctx context.Context, cfg supervisorConfig, state *supervisorS
 		fmt.Printf("⚠️  Error loading kanban: %v\n", err)
 		return
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Load worker registry
 	reg, err := worker.LoadRegistry()

@@ -116,7 +116,7 @@ func gatherSummaryData() (*summaryData, error) {
 	// Load board state
 	store, err := getKanbanStore()
 	if err == nil {
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		board, err := store.GetBoard()
 		if err == nil {
 			for _, col := range board.Columns {

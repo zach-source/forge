@@ -256,7 +256,7 @@ func TestSessionCreateKillCycle(t *testing.T) {
 
 	// Ensure cleanup
 	defer func() {
-		s.Kill()
+		_ = s.Kill()
 	}()
 
 	// Test session doesn't exist initially
@@ -292,7 +292,7 @@ func TestSessionCreate_AlreadyExists(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	// Create first session
 	if err := s.Create(); err != nil {
@@ -394,7 +394,7 @@ func TestSessionSendKeysAndCapture(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -426,7 +426,7 @@ func TestSessionCapturePaneLines(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -434,7 +434,7 @@ func TestSessionCapturePaneLines(t *testing.T) {
 
 	// Send multiple commands to generate output
 	for i := 0; i < 5; i++ {
-		s.SendKeys("echo line" + string(rune('A'+i)))
+		_ = s.SendKeys("echo line" + string(rune('A'+i)))
 		time.Sleep(100 * time.Millisecond)
 	}
 
@@ -458,7 +458,7 @@ func TestSessionRunCommand(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -488,7 +488,7 @@ func TestSessionIsClaudeRunning_ShellOnly(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -511,7 +511,7 @@ func TestSessionCreateWithLogFile(t *testing.T) {
 	logFile := workDir + "/session.log"
 	s := NewSession(name, workDir, logFile)
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() with log file error: %v", err)
@@ -522,7 +522,7 @@ func TestSessionCreateWithLogFile(t *testing.T) {
 	}
 
 	// Send some output
-	s.SendKeys("echo LOG_TEST_OUTPUT")
+	_ = s.SendKeys("echo LOG_TEST_OUTPUT")
 	time.Sleep(500 * time.Millisecond)
 
 	// Check if log file was created (may take a moment for pipe-pane)
@@ -540,7 +540,7 @@ func TestListSessions(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -573,7 +573,7 @@ func TestListSessionsWithPrefix(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -618,7 +618,7 @@ func TestListForgeSessions(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -648,7 +648,7 @@ func TestGetSessionInfo(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
@@ -716,14 +716,14 @@ func TestSessionWaitForPrompt_Timeout(t *testing.T) {
 	workDir := t.TempDir()
 	s := NewSession(name, workDir, "")
 
-	defer s.Kill()
+	defer func() { _ = s.Kill() }()
 
 	if err := s.Create(); err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
 
 	// Send a command that keeps running
-	s.SendKeys("sleep 10")
+	_ = s.SendKeys("sleep 10")
 
 	// Wait with very short timeout - should fail
 	err := s.WaitForPrompt(200*time.Millisecond, 50*time.Millisecond)

@@ -31,7 +31,7 @@ Example:
 
 			// Also check local directory
 			wd, _ := os.Getwd()
-			mgr.DiscoverLocal(wd)
+			_ = mgr.DiscoverLocal(wd)
 
 			sessions := mgr.List()
 
@@ -56,7 +56,7 @@ Example:
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "SESSION\tSTATUS\tITER\tPROMISE\tWORKDIR")
+			_, _ = fmt.Fprintln(w, "SESSION\tSTATUS\tITER\tPROMISE\tWORKDIR")
 
 			for _, s := range sessions {
 				promise := "-"
@@ -72,7 +72,7 @@ Example:
 					}
 				}
 
-				fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\n",
 					s.ID,
 					s.StatusIcon(),
 					s.Status,
@@ -82,7 +82,7 @@ Example:
 				)
 			}
 
-			w.Flush()
+			_ = w.Flush()
 			return nil
 		},
 	}

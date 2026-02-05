@@ -26,12 +26,12 @@ func setupTestBeads(t *testing.T) (string, func()) {
 	cmd := exec.Command("bd", "init")
 	cmd.Dir = tmpDir
 	if out, err := cmd.CombinedOutput(); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("bd init failed: %s", string(out))
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 	}
 
 	return tmpDir, cleanup
@@ -45,7 +45,7 @@ func TestStore_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	issue := &Issue{
 		Title:       "Test issue",
@@ -90,7 +90,7 @@ func TestStore_GetNonexistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Getting a nonexistent issue should return nil, nil (not an error)
 	// This allows the caller to handle "not found" with a clear error message
@@ -111,7 +111,7 @@ func TestStore_Update(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	issue := &Issue{Title: "Original title"}
 	if err := store.Create(issue); err != nil {
@@ -137,7 +137,7 @@ func TestStore_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	issue := &Issue{Title: "To delete"}
 	if err := store.Create(issue); err != nil {
@@ -165,7 +165,7 @@ func TestStore_List(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create issues
 	issues := []*Issue{
@@ -197,7 +197,7 @@ func TestStore_Move(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	issue := &Issue{Title: "Moving issue"}
 	if err := store.Create(issue); err != nil {
@@ -233,7 +233,7 @@ func TestStore_GetBoard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create issues
 	issues := []*Issue{
@@ -273,7 +273,7 @@ func TestStore_ParentChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create parent
 	parent := &Issue{Title: "Parent issue"}
@@ -384,5 +384,5 @@ func TestPriorityMapping(t *testing.T) {
 func init() {
 	// Create test fixtures directory if needed
 	fixturesDir := filepath.Join(os.TempDir(), "kanban-test-fixtures")
-	os.MkdirAll(fixturesDir, 0o755)
+	_ = os.MkdirAll(fixturesDir, 0o755)
 }

@@ -109,8 +109,8 @@ func TestFindChildWorkspaces(t *testing.T) {
 		ws1 := filepath.Join(dir, "project1")
 		ws2 := filepath.Join(dir, "project2")
 
-		Init(ws1, "ws1", "")
-		Init(ws2, "ws2", "")
+		_, _ = Init(ws1, "ws1", "")
+		_, _ = Init(ws2, "ws2", "")
 
 		found := findChildWorkspaces(dir, 2)
 		if len(found) != 2 {
@@ -126,11 +126,11 @@ func TestFindChildWorkspaces(t *testing.T) {
 		if err := os.MkdirAll(hidden, 0o755); err != nil {
 			t.Fatalf("mkdir error = %v", err)
 		}
-		Init(hidden, "hidden-ws", "")
+		_, _ = Init(hidden, "hidden-ws", "")
 
 		// Create visible workspace
 		visible := filepath.Join(dir, "visible")
-		Init(visible, "visible-ws", "")
+		_, _ = Init(visible, "visible-ws", "")
 
 		found := findChildWorkspaces(dir, 2)
 		if len(found) != 1 {
@@ -149,7 +149,7 @@ func TestFindChildWorkspaces(t *testing.T) {
 		if err := os.MkdirAll(nodeModules, 0o755); err != nil {
 			t.Fatalf("mkdir error = %v", err)
 		}
-		Init(nodeModules, "node-ws", "")
+		_, _ = Init(nodeModules, "node-ws", "")
 
 		found := findChildWorkspaces(dir, 3)
 		if len(found) != 0 {
@@ -165,7 +165,7 @@ func TestFindChildWorkspaces(t *testing.T) {
 		if err := os.MkdirAll(vendor, 0o755); err != nil {
 			t.Fatalf("mkdir error = %v", err)
 		}
-		Init(vendor, "vendor-ws", "")
+		_, _ = Init(vendor, "vendor-ws", "")
 
 		found := findChildWorkspaces(dir, 3)
 		if len(found) != 0 {
@@ -181,7 +181,7 @@ func TestFindChildWorkspaces(t *testing.T) {
 		if err := os.MkdirAll(pycache, 0o755); err != nil {
 			t.Fatalf("mkdir error = %v", err)
 		}
-		Init(pycache, "pycache-ws", "")
+		_, _ = Init(pycache, "pycache-ws", "")
 
 		found := findChildWorkspaces(dir, 2)
 		if len(found) != 0 {
@@ -196,8 +196,8 @@ func TestFindChildWorkspaces(t *testing.T) {
 		parent := filepath.Join(dir, "parent")
 		nested := filepath.Join(parent, "nested")
 
-		Init(parent, "parent-ws", "")
-		Init(nested, "nested-ws", "")
+		_, _ = Init(parent, "parent-ws", "")
+		_, _ = Init(nested, "nested-ws", "")
 
 		found := findChildWorkspaces(dir, 3)
 
@@ -212,7 +212,7 @@ func TestFindChildWorkspaces(t *testing.T) {
 
 	t.Run("returns nil for max depth 0", func(t *testing.T) {
 		dir := t.TempDir()
-		Init(filepath.Join(dir, "ws"), "ws", "")
+		_, _ = Init(filepath.Join(dir, "ws"), "ws", "")
 
 		found := findChildWorkspaces(dir, 0)
 		if found != nil {
@@ -228,7 +228,7 @@ func TestFindChildWorkspaces(t *testing.T) {
 		if err := os.MkdirAll(unreadable, 0o000); err != nil {
 			t.Fatalf("mkdir error = %v", err)
 		}
-		defer os.Chmod(unreadable, 0o755) // Cleanup
+		defer func() { _ = os.Chmod(unreadable, 0o755) }() // Cleanup
 
 		found := findChildWorkspaces(dir, 2)
 		// Should not error, just skip
@@ -243,10 +243,10 @@ func TestIsInsideWorkspace(t *testing.T) {
 	t.Run("returns true when inside workspace", func(t *testing.T) {
 		dir := t.TempDir()
 
-		Init(dir, "ws", "")
+		_, _ = Init(dir, "ws", "")
 
 		subDir := filepath.Join(dir, "sub", "path")
-		os.MkdirAll(subDir, 0o755)
+		_ = os.MkdirAll(subDir, 0o755)
 
 		if !IsInsideWorkspace(subDir) {
 			t.Error("should be inside workspace")
@@ -264,7 +264,7 @@ func TestIsInsideWorkspace(t *testing.T) {
 	t.Run("returns true at workspace root", func(t *testing.T) {
 		dir := t.TempDir()
 
-		Init(dir, "ws", "")
+		_, _ = Init(dir, "ws", "")
 
 		if !IsInsideWorkspace(dir) {
 			t.Error("workspace root should be inside workspace")

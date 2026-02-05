@@ -216,7 +216,7 @@ func (m Model) refreshAll() tea.Msg {
 	// Load kanban board
 	beadsDir := filepath.Join(m.workDir, ".beads")
 	if store, err := kanban.NewStore(beadsDir); err == nil {
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		if board, err := store.GetBoard(); err == nil {
 			msg.board = board
 		}

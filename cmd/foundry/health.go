@@ -519,7 +519,7 @@ func checkTaskBoard(workspace string, createTask bool) []HealthCheck {
 			Message: "Could not access task board",
 		}}
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	board, err := store.GetBoard()
 	if err != nil {
@@ -560,7 +560,7 @@ func createCIFixTask(workspace, failedRun string, failures int) string {
 	if err != nil {
 		return ""
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Check if a CI fix task already exists
 	issues, _ := store.List(kanban.StatusTodo, kanban.StatusInProgress)

@@ -89,7 +89,7 @@ func runTaskList(cmd *cobra.Command, args []string, status string) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	var issues []*kanban.Issue
 	if status != "" {
@@ -177,7 +177,7 @@ func runTaskShow(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Try to find the task (supports partial ID match)
 	taskID := args[0]
@@ -271,7 +271,7 @@ func runTaskBranches(showAll bool) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Get task branches with status
 	branches, err := kanban.ListTaskBranches(store)
@@ -286,7 +286,7 @@ func runTaskBranches(showAll bool) error {
 
 	// Print header
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "BRANCH\tSTATUS\tTASK ID\tTITLE")
+	_, _ = fmt.Fprintln(w, "BRANCH\tSTATUS\tTASK ID\tTITLE")
 
 	for _, tb := range branches {
 		// Skip merged branches unless --all
@@ -313,10 +313,10 @@ func runTaskBranches(showAll bool) error {
 			diffMarker = "*"
 		}
 
-		fmt.Fprintf(w, "%s%s\t%s\t%s\t%s\n", tb.Branch, diffMarker, status, taskID, title)
+		_, _ = fmt.Fprintf(w, "%s%s\t%s\t%s\t%s\n", tb.Branch, diffMarker, status, taskID, title)
 	}
 
-	w.Flush()
+	_ = w.Flush()
 	fmt.Println("\n* = has unmerged commits")
 	return nil
 }
@@ -429,7 +429,7 @@ func newTaskAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			issue := &kanban.Issue{
 				Title:       strings.Join(args, " "),
@@ -488,7 +488,7 @@ Shortcuts:
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			id := args[0]
 			statusArg := args[1]
@@ -555,7 +555,7 @@ func newTaskEditCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			issue, err := store.Get(args[0])
 			if err != nil {
@@ -616,7 +616,7 @@ func newTaskDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			if !force {
 				issue, err := store.Get(args[0])
@@ -652,7 +652,7 @@ func newTaskBoardCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			board, err := store.GetBoard()
 			if err != nil {

@@ -91,7 +91,7 @@ func (r *Registry) saveUnlocked() error {
 	}
 
 	if err := os.Rename(tmpPath, r.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("renaming registry: %w", err)
 	}
 

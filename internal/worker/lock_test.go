@@ -13,7 +13,7 @@ func TestLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Override lock path for testing
 	SetLocksDir(tmpDir)
@@ -76,8 +76,8 @@ func TestLock(t *testing.T) {
 	}
 
 	// Test ListLocks
-	AcquireLock("merge", "worker-1")
-	AcquireLock("deploy", "worker-2")
+	_ = AcquireLock("merge", "worker-1")
+	_ = AcquireLock("deploy", "worker-2")
 
 	locks, err := ListLocks()
 	if err != nil {
@@ -104,7 +104,7 @@ func TestCleanStaleLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	SetLocksDir(tmpDir)
 	defer SetLocksDir("")
@@ -115,10 +115,10 @@ func TestCleanStaleLocks(t *testing.T) {
 		HolderID:   "worker-1",
 		AcquiredAt: time.Now().Add(-2 * time.Hour),
 	}
-	writeLock(filepath.Join(tmpDir, "stale.lock"), lock)
+	_ = writeLock(filepath.Join(tmpDir, "stale.lock"), lock)
 
 	// Create a fresh lock
-	AcquireLock("fresh", "worker-2")
+	_ = AcquireLock("fresh", "worker-2")
 
 	// Clean locks older than 1 hour
 	err = CleanStaleLocks(1 * time.Hour)

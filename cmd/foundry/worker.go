@@ -160,7 +160,7 @@ Examples:
 			}
 
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSTATUS\tROLE\tTASK\tWORKTREE")
+			_, _ = fmt.Fprintln(tw, "NAME\tSTATUS\tROLE\tTASK\tWORKTREE")
 
 			for _, w := range workers {
 				task := "-"
@@ -184,7 +184,7 @@ Examples:
 					name = fmt.Sprintf("%s (%s)", w.Name, w.Alias)
 				}
 
-				fmt.Fprintf(tw, "%s\t%s %s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(tw, "%s\t%s %s\t%s\t%s\t%s\n",
 					name,
 					w.StatusIcon(),
 					w.Status,
@@ -194,7 +194,7 @@ Examples:
 				)
 			}
 
-			tw.Flush()
+			_ = tw.Flush()
 
 			// Show summary
 			counts := reg.CountByStatus()

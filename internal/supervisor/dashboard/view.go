@@ -28,18 +28,13 @@ var (
 			Padding(0, 2).
 			MarginRight(1)
 
-	activeTabStyle = tabStyle.Copy().
+	activeTabStyle = tabStyle.
 			Bold(true).
 			Background(primaryColor).
 			Foreground(lipgloss.Color("0"))
 
-	inactiveTabStyle = tabStyle.Copy().
+	inactiveTabStyle = tabStyle.
 				Foreground(mutedColor)
-
-	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(mutedColor).
-			Padding(1, 2)
 
 	statusRunning = lipgloss.NewStyle().Foreground(successColor).Render("●")
 	statusIdle    = lipgloss.NewStyle().Foreground(mutedColor).Render("○")
@@ -175,9 +170,10 @@ func (m Model) renderOverview() string {
 	b.WriteString("Infrastructure\n")
 	if m.health != nil {
 		statusIcon := statusRunning
-		if m.health.Status == "degraded" {
+		switch m.health.Status {
+		case "degraded":
 			statusIcon = lipgloss.NewStyle().Foreground(secondaryColor).Render("●")
-		} else if m.health.Status == "critical" {
+		case "critical":
 			statusIcon = lipgloss.NewStyle().Foreground(errorColor).Render("●")
 		}
 		b.WriteString(fmt.Sprintf("  Status: %s %s\n", statusIcon, m.health.Status))
@@ -324,9 +320,10 @@ func (m Model) renderTasks() string {
 			}
 
 			priority := string(issue.Priority)
-			if issue.Priority == kanban.PriorityCritical {
+			switch issue.Priority {
+			case kanban.PriorityCritical:
 				priority = lipgloss.NewStyle().Foreground(errorColor).Render(priority)
-			} else if issue.Priority == kanban.PriorityHigh {
+			case kanban.PriorityHigh:
 				priority = lipgloss.NewStyle().Foreground(secondaryColor).Render(priority)
 			}
 

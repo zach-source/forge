@@ -113,7 +113,7 @@ func TestStartCmdArgsValidation(t *testing.T) {
 
 	// Set flags to satisfy requirements
 	cmd.SetArgs([]string{})
-	cmd.Flags().Set("promise", "DONE")
+	_ = cmd.Flags().Set("promise", "DONE")
 
 	// Execute should fail without args (but won't run the RunE due to Args check)
 	err := cmd.Execute()
@@ -127,7 +127,7 @@ func TestStartCmdTooManyArgs(t *testing.T) {
 	cmd := newStartCmd()
 
 	cmd.SetArgs([]string{"arg1", "arg2"})
-	cmd.Flags().Set("promise", "DONE")
+	_ = cmd.Flags().Set("promise", "DONE")
 
 	err := cmd.Execute()
 	if err == nil {

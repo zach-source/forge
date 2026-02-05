@@ -14,7 +14,7 @@ func TestConfiguratorGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	// Read and parse the generated config
 	data, err := os.ReadFile(path)
@@ -61,12 +61,12 @@ func TestConfiguratorWithBaseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	// Read and parse
 	data, _ = os.ReadFile(path)
 	var config Config
-	json.Unmarshal(data, &config)
+	_ = json.Unmarshal(data, &config)
 
 	// Should have both custom and graphiti
 	if _, ok := config.MCPServers["custom-server"]; !ok {
