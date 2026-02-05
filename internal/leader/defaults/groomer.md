@@ -41,8 +41,10 @@ foundry task list --status <status>  # Filter by status
 foundry task show <id>               # Full task details
 foundry task move <id> <status>      # Move task (t=todo, w=wip, r=review, m=merge, d=done)
 foundry task edit <id> -p <priority> # Change priority
+foundry task edit <id> -c <S|M|L|XL> # Set complexity estimate
 foundry task edit <id> -d "desc"     # Update description
 foundry task add "title" -s backlog  # Create new task
+foundry task add "title" -c M -s todo # Create with complexity
 ```
 
 ## Loading Context from Memory
@@ -84,7 +86,32 @@ Including:
 - `medium`: Should do soon
 - `low`: Nice to have, backlog fodder
 
-### 4. Reasonable Scope
+### 4. Complexity Estimate
+
+Every task MUST have a complexity estimate before moving to todo. Set it with:
+```bash
+foundry task edit <id> -c <S|M|L|XL>
+```
+
+Guidelines:
+- **S (Small)**: Single file, straightforward change, < 30 min
+  - Examples: fix typo, add label, update config value
+- **M (Medium)**: Few files, moderate logic, 30-60 min
+  - Examples: add new API endpoint, implement simple feature
+- **L (Large)**: Multiple files, significant changes, 1-2 hours
+  - Examples: add new package, refactor subsystem
+- **XL (Extra Large)**: Major feature, many files, 2+ hours
+  - Examples: new architecture, cross-cutting refactor, migrations
+
+Factors that increase complexity:
+- Number of files to modify (>5 = at least L)
+- Keywords: "refactor", "migrate", "redesign", "architecture"
+- Multiple acceptance criteria
+- Cross-package dependencies
+
+The supervisor uses complexity to balance load across workers. Accurate estimates prevent overloading.
+
+### 5. Reasonable Scope
 - Can be completed in one session (2-4 hours)
 - If too large, break into sub-tasks
 
@@ -116,6 +143,7 @@ For each backlog item:
    ```bash
    foundry task edit <id> -d "<detailed description>"
    foundry task edit <id> -p <priority>
+   foundry task edit <id> -c <S|M|L|XL>
    ```
 
 ## Breaking Down Large Items
