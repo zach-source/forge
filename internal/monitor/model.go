@@ -41,11 +41,49 @@ type sessionRefreshedMsg struct {
 
 // dataRefreshedMsg is sent after all data is refreshed.
 type dataRefreshedMsg struct {
-	sessions   []*session.Session
-	workers    []*worker.Worker
-	kanban     *kanban.Board
-	logEntries []logs.LogEntry
+	sessions     []*session.Session
+	workers      []*worker.Worker
+	workerHealth map[string]*WorkerHealth
+	kanban       *kanban.Board
+	logEntries   []logs.LogEntry
 }
+
+// WorkerHealth contains health metrics for a worker.
+type WorkerHealth struct {
+	// Uptime is how long the worker has been running (if active)
+	Uptime time.Duration
+	// LastActivity is when the worker last had activity
+	LastActivity time.Time
+	// IsStuck indicates the worker has had no activity for >30m
+	IsStuck bool
+	// StuckDuration is how long the worker has been stuck
+	StuckDuration time.Duration
+	// PromiseStatus indicates promise detection state
+	PromiseStatus PromiseStatus
+	// Promise is the expected completion promise text
+	Promise string
+	// Iteration is the current iteration count
+	Iteration int
+	// MaxIterations is the max iterations (0 = unlimited)
+	MaxIterations int
+	// SessionActive indicates if the tmux session is still running
+	SessionActive bool
+}
+
+// PromiseStatus indicates the state of promise detection.
+type PromiseStatus int
+
+const (
+	// PromiseNone means no promise is configured
+	PromiseNone PromiseStatus = iota
+	// PromisePending means waiting for promise to be detected
+	PromisePending
+	// PromiseDetected means the promise was found in output
+	PromiseDetected
+)
+
+// StuckThreshold is the duration after which a worker is considered stuck.
+const StuckThreshold = 30 * time.Minute
 
 // attachMsg is sent when we should attach to a session.
 type attachMsg struct {
@@ -59,10 +97,11 @@ type Model struct {
 	selected  int // selected item in current tab
 
 	// Data
-	sessions   *session.Manager
-	workers    []*worker.Worker
-	kanban     *kanban.Board
-	logEntries []logs.LogEntry
+	sessions     *session.Manager
+	workers      []*worker.Worker
+	workerHealth map[string]*WorkerHealth
+	kanban       *kanban.Board
+	logEntries   []logs.LogEntry
 
 	// Output preview
 	output []string
@@ -115,6 +154,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dataRefreshedMsg:
 		m.workers = msg.workers
+		m.workerHealth = msg.workerHealth
 		m.kanban = msg.kanban
 		m.logEntries = msg.logEntries
 		// Update output for selected session
@@ -300,6 +340,9 @@ func (m Model) refreshAll() tea.Msg {
 		workers = reg.List()
 	}
 
+	// Compute worker health
+	workerHealth := computeWorkerHealth(workers, sessions)
+
 	// Refresh kanban
 	var board *kanban.Board
 	if store, err := kanban.NewStore(m.workDir); err == nil {
@@ -311,11 +354,105 @@ func (m Model) refreshAll() tea.Msg {
 	logEntries, _ := logs.ListLogs(logs.ListOptions{})
 
 	return dataRefreshedMsg{
-		sessions:   sessions,
-		workers:    workers,
-		kanban:     board,
-		logEntries: logEntries,
+		sessions:     sessions,
+		workers:      workers,
+		workerHealth: workerHealth,
+		kanban:       board,
+		logEntries:   logEntries,
 	}
+}
+
+// computeWorkerHealth computes health metrics for all workers.
+func computeWorkerHealth(workers []*worker.Worker, sessions []*session.Session) map[string]*WorkerHealth {
+	health := make(map[string]*WorkerHealth)
+
+	// Build session lookup by ID
+	sessionByID := make(map[string]*session.Session)
+	for _, s := range sessions {
+		sessionByID[s.ID] = s
+	}
+
+	for _, w := range workers {
+		h := &WorkerHealth{
+			LastActivity:  w.LastActive,
+			PromiseStatus: PromiseNone,
+		}
+
+		// Calculate uptime for active workers
+		if w.Status == worker.StatusActive && !w.LastActive.IsZero() {
+			h.Uptime = time.Since(w.LastActive)
+		}
+
+		// Check if stuck (no activity for >30m and worker is active)
+		if w.Status == worker.StatusActive && !w.LastActive.IsZero() {
+			timeSinceActive := time.Since(w.LastActive)
+			if timeSinceActive > StuckThreshold {
+				h.IsStuck = true
+				h.StuckDuration = timeSinceActive
+			}
+		}
+
+		// Get session info if worker has an active session
+		if w.SessionID != "" {
+			// Try to find session by tmux session name
+			tmuxName := w.TmuxSessionName()
+			for _, s := range sessions {
+				if s.Tmux == tmuxName || s.ID == w.SessionID {
+					h.SessionActive = s.Status == session.StatusActive
+
+					// Get state info from session
+					if s.State != nil {
+						h.Iteration = s.State.Iteration
+						h.MaxIterations = s.State.MaxIterations
+						h.Promise = s.State.CompletionPromise
+
+						if h.Promise != "" {
+							h.PromiseStatus = PromisePending
+						}
+
+						// Update uptime from session start time
+						if !s.State.StartedAt.IsZero() {
+							h.Uptime = time.Since(s.State.StartedAt)
+						}
+
+						// Check if session is still active in state
+						if s.State.Active {
+							h.SessionActive = true
+						}
+					}
+					break
+				}
+			}
+
+			// Also try reading state file directly for more accurate info
+			statePath := ralph.SessionStatePath(w.SessionID)
+			ctrl := ralph.NewStateController(statePath)
+			if state, err := ctrl.Read(); err == nil {
+				h.Iteration = state.Iteration
+				h.MaxIterations = state.MaxIterations
+				h.Promise = state.CompletionPromise
+				h.SessionActive = state.Active
+
+				if h.Promise != "" {
+					h.PromiseStatus = PromisePending
+				}
+
+				if !state.StartedAt.IsZero() {
+					h.Uptime = time.Since(state.StartedAt)
+				}
+			}
+
+			// Check tmux session exists
+			tmuxSession := tmux.NewSession(tmuxName, "", "")
+			if tmuxSession.Exists() {
+				h.SessionActive = true
+			}
+		}
+
+		health[w.ID] = h
+	}
+
+	return health
 }
 
 // updateOutput updates the output preview for the selected item.
