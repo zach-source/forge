@@ -82,6 +82,27 @@ func TestStore_CreateAndGet(t *testing.T) {
 	}
 }
 
+func TestStore_GetNonexistent(t *testing.T) {
+	tmpDir, cleanup := setupTestBeads(t)
+	defer cleanup()
+
+	store, err := NewStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	// Getting a nonexistent issue should return nil, nil (not an error)
+	// This allows the caller to handle "not found" with a clear error message
+	got, err := store.Get("nonexistent-task-id")
+	if err != nil {
+		t.Errorf("Get nonexistent: expected no error, got %v", err)
+	}
+	if got != nil {
+		t.Errorf("Get nonexistent: expected nil issue, got %+v", got)
+	}
+}
+
 func TestStore_Update(t *testing.T) {
 	tmpDir, cleanup := setupTestBeads(t)
 	defer cleanup()

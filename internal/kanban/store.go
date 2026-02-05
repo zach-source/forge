@@ -105,8 +105,9 @@ func (s *Store) Get(id string) (*Issue, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "not found") {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			// bd returns non-zero with empty stderr when issue doesn't exist
+			if strings.Contains(stderr, "not found") || stderr == "" {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("bd show failed: %s", stderr)
