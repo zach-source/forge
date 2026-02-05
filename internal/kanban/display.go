@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/zach-source/forge/internal/complexity"
 )
 
 var (
@@ -55,6 +56,14 @@ var (
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("62")).
 			Padding(0, 1)
+
+	// Complexity badge styles
+	complexityStyles = map[complexity.Complexity]lipgloss.Style{
+		complexity.ComplexitySmall:  lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
+		complexity.ComplexityMedium: lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true),
+		complexity.ComplexityLarge:  lipgloss.NewStyle().Foreground(lipgloss.Color("202")).Bold(true),
+		complexity.ComplexityXL:     lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
+	}
 )
 
 // RenderCard renders a single issue card.
@@ -78,6 +87,13 @@ func RenderCard(issue *Issue, width int) string {
 		prioStyle := priorityStyles[issue.Priority]
 		b.WriteString(" ")
 		b.WriteString(prioStyle.Render(string(issue.Priority)))
+	}
+
+	// Complexity badge
+	if issue.Complexity.Valid() {
+		compStyle := complexityStyles[issue.Complexity]
+		b.WriteString(" ")
+		b.WriteString(compStyle.Render("[" + string(issue.Complexity) + "]"))
 	}
 
 	// Labels
@@ -169,6 +185,13 @@ func RenderList(issues []*Issue) string {
 		prioStyle := priorityStyles[issue.Priority]
 		b.WriteString(prioStyle.Render(fmt.Sprintf("[%s]", issue.Priority)))
 		b.WriteString(" ")
+
+		// Complexity badge
+		if issue.Complexity.Valid() {
+			compStyle := complexityStyles[issue.Complexity]
+			b.WriteString(compStyle.Render(fmt.Sprintf("[%s]", issue.Complexity)))
+			b.WriteString(" ")
+		}
 
 		// Title
 		b.WriteString(cardTitleStyle.Render(issue.Title))

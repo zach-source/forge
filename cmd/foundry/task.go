@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	complexityPkg "github.com/zach-source/forge/internal/complexity"
 	"github.com/zach-source/forge/internal/kanban"
 	"golang.org/x/term"
 )
@@ -137,8 +138,12 @@ func runTaskList(cmd *cobra.Command, args []string, status string) error {
 				title = title[:57] + "..."
 			}
 
-			// Format: ID [priority] Title
-			fmt.Printf("  %-18s [%-4s] %s\n", issue.ID, issue.Priority, title)
+			// Format: ID [priority] [complexity] Title
+			comp := ""
+			if issue.Complexity.Valid() {
+				comp = fmt.Sprintf("[%s] ", issue.Complexity)
+			}
+			fmt.Printf("  %-18s [%-4s] %s%s\n", issue.ID, issue.Priority, comp, title)
 		}
 	}
 
@@ -194,6 +199,13 @@ func runTaskShow(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Title:       %s\n", issue.Title)
 	fmt.Printf("Status:      %s\n", issue.Status)
 	fmt.Printf("Priority:    %s\n", issue.Priority)
+
+	if issue.Complexity.Valid() {
+		fmt.Printf("Complexity:  %s (score: %d)\n", issue.Complexity, complexityPkg.Score(issue.Complexity))
+	}
+	if issue.ActualComplexity.Valid() {
+		fmt.Printf("Actual:      %s\n", issue.ActualComplexity)
+	}
 
 	if len(issue.Labels) > 0 {
 		fmt.Printf("Labels:      %s\n", strings.Join(issue.Labels, ", "))
@@ -411,12 +423,13 @@ func runTaskLog(taskID string, numCommits int) error {
 
 func newTaskAddCmd() *cobra.Command {
 	var (
-		priority    string
-		status      string
-		labels      string
-		assignee    string
-		description string
-		parentID    string
+		priority       string
+		status         string
+		labels         string
+		assignee       string
+		description    string
+		parentID       string
+		complexityFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -438,6 +451,14 @@ func newTaskAddCmd() *cobra.Command {
 				Status:      kanban.Status(status),
 				Assignee:    assignee,
 				ParentID:    parentID,
+			}
+
+			if complexityFlag != "" {
+				c, err := complexityPkg.Parse(complexityFlag)
+				if err != nil {
+					return err
+				}
+				issue.Complexity = c
 			}
 
 			if labels != "" {
@@ -463,6 +484,7 @@ func newTaskAddCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&assignee, "assignee", "a", "", "Assignee")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "Description")
 	cmd.Flags().StringVar(&parentID, "parent", "", "Parent task ID")
+	cmd.Flags().StringVarP(&complexityFlag, "complexity", "c", "", "Complexity estimate (S, M, L, XL)")
 
 	return cmd
 }
@@ -539,11 +561,12 @@ func expandStatus(s string) kanban.Status {
 
 func newTaskEditCmd() *cobra.Command {
 	var (
-		title       string
-		priority    string
-		labels      string
-		assignee    string
-		description string
+		title          string
+		priority       string
+		labels         string
+		assignee       string
+		description    string
+		complexityFlag string
 	)
 
 	cmd := &cobra.Command{
@@ -584,6 +607,13 @@ func newTaskEditCmd() *cobra.Command {
 			if description != "" {
 				issue.Description = description
 			}
+			if complexityFlag != "" {
+				c, err := complexityPkg.Parse(complexityFlag)
+				if err != nil {
+					return err
+				}
+				issue.Complexity = c
+			}
 
 			if err := store.Update(issue); err != nil {
 				return err
@@ -599,6 +629,7 @@ func newTaskEditCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&labels, "labels", "l", "", "New labels (comma-separated)")
 	cmd.Flags().StringVarP(&assignee, "assignee", "a", "", "New assignee")
 	cmd.Flags().StringVarP(&description, "description", "d", "", "New description")
+	cmd.Flags().StringVarP(&complexityFlag, "complexity", "c", "", "Complexity estimate (S, M, L, XL)")
 
 	return cmd
 }

@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/zach-source/forge/internal/complexity"
 	"github.com/zach-source/forge/internal/detector"
 	"github.com/zach-source/forge/internal/health"
 	"github.com/zach-source/forge/internal/kanban"
@@ -31,6 +32,7 @@ func newSupervisorCmd() *cobra.Command {
 		stuckThreshold       time.Duration
 		maxPokes             int
 		maxConcurrentWorkers int
+		maxLoad              int
 		workDir              string
 		autoAssign           bool
 		withLeaders          bool
@@ -101,6 +103,7 @@ Examples:
 				stuckThreshold:       stuckThreshold,
 				maxPokes:             maxPokes,
 				maxConcurrentWorkers: maxConcurrentWorkers,
+				maxLoad:              maxLoad,
 				workDir:              workDir,
 				autoAssign:           autoAssign,
 				withLeaders:          withLeaders || leadersFlag != "",
@@ -123,6 +126,7 @@ Examples:
 	cmd.Flags().DurationVar(&stuckThreshold, "stuck", 10*time.Minute, "Requeue tasks stuck longer than this")
 	cmd.Flags().IntVar(&maxPokes, "max-pokes", 10, "Max pokes per worker before escalating (0 = unlimited)")
 	cmd.Flags().IntVar(&maxConcurrentWorkers, "max-workers", 4, "Maximum concurrent development workers")
+	cmd.Flags().IntVar(&maxLoad, "max-load", 8, "Maximum concurrent complexity load (S=1, M=2, L=3, XL=4)")
 	cmd.Flags().StringVarP(&workDir, "dir", "d", "", "Working directory (default: current)")
 	cmd.Flags().BoolVar(&autoAssign, "auto-assign", true, "Automatically assign tasks to idle workers")
 	cmd.Flags().BoolVar(&withLeaders, "leaders", false, "Enable all leader agents (planner, reviewer, merge, deploy)")
@@ -149,6 +153,7 @@ type supervisorConfig struct {
 	stuckThreshold       time.Duration
 	maxPokes             int
 	maxConcurrentWorkers int
+	maxLoad              int
 	workDir              string
 	autoAssign           bool
 	withLeaders          bool
@@ -975,6 +980,7 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	fmt.Printf("   Interval: %s\n", cfg.interval)
 	fmt.Printf("   Work dir: %s\n", cfg.workDir)
 	fmt.Printf("   Max workers: %d\n", cfg.maxConcurrentWorkers)
+	fmt.Printf("   Max load: %d (S=1, M=2, L=3, XL=4)\n", cfg.maxLoad)
 	fmt.Printf("   Auto-assign: %v\n", cfg.autoAssign)
 
 	// Display enabled leaders
@@ -1712,20 +1718,35 @@ Respond with ONLY one line: either "NO_POKE: reason" or "POKE: reason"`,
 }
 
 func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
-	// Count active development workers
+	// Count active development workers and calculate complexity load
 	activeWorkers := reg.List(worker.StatusActive)
 	activeCount := 0
+	currentLoad := 0
 	var activeNames []string
 	for _, w := range activeWorkers {
 		if w.Role == worker.RoleWorker {
 			activeCount++
 			activeNames = append(activeNames, w.DisplayName())
+			// Sum complexity load from active tasks
+			if taskID := state.workerTasks[w.ID]; taskID != "" {
+				if task, err := store.Get(taskID); err == nil && task != nil && task.Complexity.Valid() {
+					currentLoad += complexity.Score(task.Complexity)
+				} else {
+					currentLoad += complexity.Score(complexity.ComplexityMedium) // default M
+				}
+			}
 		}
 	}
 
-	// Respect concurrent limit
+	// Respect concurrent worker limit
 	if activeCount >= cfg.maxConcurrentWorkers {
 		fmt.Printf("⏸️  At max workers (%d/%d active: %v)\n", activeCount, cfg.maxConcurrentWorkers, activeNames)
+		return
+	}
+
+	// Respect complexity load limit
+	if cfg.maxLoad > 0 && currentLoad >= cfg.maxLoad {
+		fmt.Printf("⏸️  At max complexity load (%d/%d, %d workers active)\n", currentLoad, cfg.maxLoad, activeCount)
 		return
 	}
 
@@ -1765,15 +1786,27 @@ func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry,
 			break
 		}
 
-		// Find next unassigned task
+		// Find next unassigned task that fits within load budget
 		var task *kanban.Issue
 		for taskIdx < len(todoTasks) {
 			candidate := todoTasks[taskIdx]
 			taskIdx++
-			if state.taskWorkers[candidate.ID] == "" {
-				task = candidate
-				break
+			if state.taskWorkers[candidate.ID] != "" {
+				continue
 			}
+			// Check if adding this task would exceed load limit
+			taskScore := complexity.Score(candidate.Complexity)
+			if !candidate.Complexity.Valid() {
+				taskScore = complexity.Score(complexity.ComplexityMedium) // default
+			}
+			if cfg.maxLoad > 0 && currentLoad+taskScore > cfg.maxLoad {
+				fmt.Printf("   ⏸️  Skipping %s [%s] (would exceed load: %d+%d > %d)\n",
+					candidate.ID[:8], candidate.Complexity, currentLoad, taskScore, cfg.maxLoad)
+				continue
+			}
+			task = candidate
+			currentLoad += taskScore
+			break
 		}
 
 		// No more tasks available
@@ -1783,6 +1816,10 @@ func assignTasks(ctx context.Context, store *kanban.Store, reg *worker.Registry,
 
 		// Start the worker on this task
 		fmt.Printf("🚀 Assigning %s to worker %s\n", task.ID[:8], w.DisplayName())
+		if task.Complexity.Valid() {
+			fmt.Printf("   Complexity: %s (score: %d, load: %d/%d)\n",
+				task.Complexity, complexity.Score(task.Complexity), currentLoad, cfg.maxLoad)
+		}
 		fmt.Printf("   Task: %s\n", task.Title)
 
 		// Create worktree for this task (enables parallel execution)
@@ -3841,6 +3878,7 @@ func buildSmartStatePrompt(store *kanban.Store, reg *worker.Registry, state *sup
 	// Config constraints
 	sb.WriteString("\n## Constraints\n\n")
 	sb.WriteString(fmt.Sprintf("- Max concurrent workers: %d\n", cfg.maxConcurrentWorkers))
+	sb.WriteString(fmt.Sprintf("- Max complexity load: %d\n", cfg.maxLoad))
 	sb.WriteString(fmt.Sprintf("- Auto-assign enabled: %v\n", cfg.autoAssign))
 	sb.WriteString(fmt.Sprintf("- Leaders enabled: %v\n", cfg.withLeaders))
 

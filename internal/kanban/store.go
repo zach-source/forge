@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/zach-source/forge/internal/complexity"
 )
 
 // Store provides access to beads (bd) for kanban operations.
@@ -58,8 +60,8 @@ func (s *Store) Create(issue *Issue) error {
 		args = append(args, "-a", issue.Assignee)
 	}
 
-	// Combine user labels with kanban status label
-	allLabels := make([]string, 0, len(issue.Labels)+1)
+	// Combine user labels with internal labels
+	allLabels := make([]string, 0, len(issue.Labels)+3)
 	allLabels = append(allLabels, issue.Labels...)
 
 	// Add kanban: label to preserve status
@@ -68,6 +70,14 @@ func (s *Store) Create(issue *Issue) error {
 	}
 	if kanbanLabel := kanbanLabelForStatus(issue.Status); kanbanLabel != "" {
 		allLabels = append(allLabels, kanbanLabel)
+	}
+
+	// Add complexity labels
+	if issue.Complexity.Valid() {
+		allLabels = append(allLabels, "complexity:"+string(issue.Complexity))
+	}
+	if issue.ActualComplexity.Valid() {
+		allLabels = append(allLabels, "actual-complexity:"+string(issue.ActualComplexity))
 	}
 
 	if len(allLabels) > 0 {
@@ -251,6 +261,90 @@ func (s *Store) Move(id string, status Status) error {
 	return s.updateKanbanLabel(id, status)
 }
 
+// SetComplexity updates the complexity label for an issue.
+func (s *Store) SetComplexity(id string, c complexity.Complexity) error {
+	issue, err := s.Get(id)
+	if err != nil || issue == nil {
+		return err
+	}
+
+	// Get the raw bd issue to access all labels (including internal ones)
+	cmd := exec.Command("bd", "show", id, "--json")
+	cmd.Dir = s.workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("bd show failed: %w", err)
+	}
+
+	var bdIssues []bdIssue
+	if err := json.Unmarshal(out, &bdIssues); err != nil {
+		return fmt.Errorf("parsing bd output: %w", err)
+	}
+	if len(bdIssues) == 0 {
+		return fmt.Errorf("issue not found: %s", id)
+	}
+
+	// Build new labels: keep non-complexity labels, add new complexity label
+	var newLabels []string
+	for _, label := range bdIssues[0].Labels {
+		if !strings.HasPrefix(label, "complexity:") {
+			newLabels = append(newLabels, label)
+		}
+	}
+	if c.Valid() {
+		newLabels = append(newLabels, "complexity:"+string(c))
+	}
+
+	updateCmd := exec.Command("bd", "update", id, "--set-labels", strings.Join(newLabels, ","))
+	updateCmd.Dir = s.workDir
+	if out, err := updateCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bd update labels failed: %s", string(out))
+	}
+
+	return nil
+}
+
+// SetActualComplexity updates the actual complexity label for an issue.
+func (s *Store) SetActualComplexity(id string, c complexity.Complexity) error {
+	issue, err := s.Get(id)
+	if err != nil || issue == nil {
+		return err
+	}
+
+	cmd := exec.Command("bd", "show", id, "--json")
+	cmd.Dir = s.workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("bd show failed: %w", err)
+	}
+
+	var bdIssues []bdIssue
+	if err := json.Unmarshal(out, &bdIssues); err != nil {
+		return fmt.Errorf("parsing bd output: %w", err)
+	}
+	if len(bdIssues) == 0 {
+		return fmt.Errorf("issue not found: %s", id)
+	}
+
+	var newLabels []string
+	for _, label := range bdIssues[0].Labels {
+		if !strings.HasPrefix(label, "actual-complexity:") {
+			newLabels = append(newLabels, label)
+		}
+	}
+	if c.Valid() {
+		newLabels = append(newLabels, "actual-complexity:"+string(c))
+	}
+
+	updateCmd := exec.Command("bd", "update", id, "--set-labels", strings.Join(newLabels, ","))
+	updateCmd.Dir = s.workDir
+	if out, err := updateCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bd update labels failed: %s", string(out))
+	}
+
+	return nil
+}
+
 // updateKanbanLabel sets the kanban: label for an issue.
 func (s *Store) updateKanbanLabel(id string, status Status) error {
 	// Get current issue to preserve other labels
@@ -379,25 +473,39 @@ func bdToKanbanIssue(bdi *bdIssue) *Issue {
 	// Determine kanban status from bd status + labels
 	status := bdToKanbanStatusWithLabels(bdi.Status, bdi.Labels)
 
-	// Filter out kanban: prefixed labels from the visible labels
+	// Extract complexity and filter out internal labels from visible labels
 	var visibleLabels []string
+	var comp, actualComp complexity.Complexity
 	for _, label := range bdi.Labels {
-		if !strings.HasPrefix(label, "kanban:") {
+		switch {
+		case strings.HasPrefix(label, "kanban:"):
+			// internal label, skip
+		case strings.HasPrefix(label, "complexity:"):
+			if c, err := complexity.Parse(strings.TrimPrefix(label, "complexity:")); err == nil {
+				comp = c
+			}
+		case strings.HasPrefix(label, "actual-complexity:"):
+			if c, err := complexity.Parse(strings.TrimPrefix(label, "actual-complexity:")); err == nil {
+				actualComp = c
+			}
+		default:
 			visibleLabels = append(visibleLabels, label)
 		}
 	}
 
 	return &Issue{
-		ID:          bdi.ID,
-		Title:       bdi.Title,
-		Description: bdi.Description,
-		Status:      status,
-		Priority:    bdToKanbanPriority(bdi.Priority),
-		Labels:      visibleLabels,
-		Assignee:    bdi.Owner,
-		ParentID:    bdi.ParentID,
-		CreatedAt:   bdi.CreatedAt,
-		UpdatedAt:   bdi.UpdatedAt,
+		ID:               bdi.ID,
+		Title:            bdi.Title,
+		Description:      bdi.Description,
+		Status:           status,
+		Priority:         bdToKanbanPriority(bdi.Priority),
+		Complexity:       comp,
+		ActualComplexity: actualComp,
+		Labels:           visibleLabels,
+		Assignee:         bdi.Owner,
+		ParentID:         bdi.ParentID,
+		CreatedAt:        bdi.CreatedAt,
+		UpdatedAt:        bdi.UpdatedAt,
 	}
 }
 

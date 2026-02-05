@@ -3,6 +3,8 @@ package kanban
 
 import (
 	"time"
+
+	"github.com/zach-source/forge/internal/complexity"
 )
 
 // Status represents the kanban column for an issue.
@@ -34,16 +36,18 @@ const (
 
 // Issue represents a kanban issue/task.
 type Issue struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description,omitempty"`
-	Status      Status    `json:"status"`
-	Priority    Priority  `json:"priority"`
-	Labels      []string  `json:"labels,omitempty"`
-	Assignee    string    `json:"assignee,omitempty"`
-	ParentID    string    `json:"parent_id,omitempty"` // For subtasks
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID               string                `json:"id"`
+	Title            string                `json:"title"`
+	Description      string                `json:"description,omitempty"`
+	Status           Status                `json:"status"`
+	Priority         Priority              `json:"priority"`
+	Complexity       complexity.Complexity `json:"complexity,omitempty"`
+	ActualComplexity complexity.Complexity `json:"actual_complexity,omitempty"`
+	Labels           []string              `json:"labels,omitempty"`
+	Assignee         string                `json:"assignee,omitempty"`
+	ParentID         string                `json:"parent_id,omitempty"` // For subtasks
+	CreatedAt        time.Time             `json:"created_at"`
+	UpdatedAt        time.Time             `json:"updated_at"`
 }
 
 // IsValid checks if the issue has required fields.
