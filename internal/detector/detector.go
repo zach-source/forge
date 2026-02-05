@@ -24,6 +24,7 @@ func New(promise string) *Detector {
 
 // IsComplete checks if the output contains the completion promise.
 func (d *Detector) IsComplete(output string) bool {
+	// First check for properly formatted <promise>TEXT</promise> tags
 	matches := d.pattern.FindAllStringSubmatch(output, -1)
 	for _, match := range matches {
 		if len(match) >= 2 {
@@ -33,6 +34,17 @@ func (d *Detector) IsComplete(output string) bool {
 			}
 		}
 	}
+
+	// Fallback: check for bare promise text (Claude sometimes forgets the tags)
+	// Only match if it appears on its own line to avoid false positives
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if d.matches(trimmed) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -74,10 +86,24 @@ func (d *Detector) Check(output string) *Result {
 	promises := d.ExtractPromises(output)
 	complete := false
 
+	// Check XML-formatted promises first
 	for _, p := range promises {
 		if d.matches(p) {
 			complete = true
 			break
+		}
+	}
+
+	// Fallback: check for bare promise text on its own line
+	if !complete {
+		lines := strings.Split(output, "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if d.matches(trimmed) {
+				complete = true
+				promises = append(promises, trimmed+" (bare)")
+				break
+			}
 		}
 	}
 

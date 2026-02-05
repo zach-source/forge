@@ -19,6 +19,26 @@ var (
 	ErrTmuxNotFound    = errors.New("tmux not found in PATH")
 )
 
+// SocketName is the tmux socket name for forge sessions.
+// Using a separate socket isolates forge sessions from user's regular tmux.
+// Default is "forge" which creates socket at /tmp/tmux-<uid>/forge
+var SocketName = "forge"
+
+// tmuxCmd creates an exec.Command for tmux with the forge socket.
+// All tmux operations should use this to ensure session isolation.
+func tmuxCmd(args ...string) *exec.Cmd {
+	// Prepend -L <socket> to use separate tmux server
+	fullArgs := append([]string{"-L", SocketName}, args...)
+	return exec.Command("tmux", fullArgs...)
+}
+
+// tmuxCmdEnv creates an exec.Command for tmux with environment variables.
+func tmuxCmdEnv(env []string, args ...string) *exec.Cmd {
+	cmd := tmuxCmd(args...)
+	cmd.Env = append(os.Environ(), env...)
+	return cmd
+}
+
 // Session represents a tmux session for running a forge agent.
 type Session struct {
 	Name    string
@@ -54,7 +74,7 @@ func (s *Session) Create() error {
 		"bash", "--norc", "--noprofile", // Use bash with no config for speed
 	}
 
-	cmd := exec.Command("tmux", args...)
+	cmd := tmuxCmd(args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("creating tmux session: %w", err)
 	}
@@ -62,13 +82,13 @@ func (s *Session) Create() error {
 	// Set up pipe-pane for logging if log file specified
 	if s.LogFile != "" {
 		// Use tee for better buffering and reliability
-		pipeCmd := exec.Command("tmux", "pipe-pane", "-t", s.Name, "-o", fmt.Sprintf("tee -a %s", s.LogFile))
+		pipeCmd := tmuxCmd("pipe-pane", "-t", s.Name, "-o", fmt.Sprintf("tee -a %s", s.LogFile))
 		if err := pipeCmd.Run(); err != nil {
 			return fmt.Errorf("setting up pipe-pane: %w", err)
 		}
 
 		// Increase history-limit as safety net for scrollback
-		histCmd := exec.Command("tmux", "set-option", "-t", s.Name, "history-limit", "50000")
+		histCmd := tmuxCmd("set-option", "-t", s.Name, "history-limit", "50000")
 		histCmd.Run() // Non-fatal
 	}
 
@@ -77,7 +97,7 @@ func (s *Session) Create() error {
 
 // Exists returns true if the tmux session exists.
 func (s *Session) Exists() bool {
-	cmd := exec.Command("tmux", "has-session", "-t", s.Name)
+	cmd := tmuxCmd("has-session", "-t", s.Name)
 	return cmd.Run() == nil
 }
 
@@ -87,7 +107,7 @@ func (s *Session) Kill() error {
 		return nil // Already gone
 	}
 
-	cmd := exec.Command("tmux", "kill-session", "-t", s.Name)
+	cmd := tmuxCmd("kill-session", "-t", s.Name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("killing tmux session: %w", err)
 	}
@@ -100,7 +120,7 @@ func (s *Session) SendKeys(keys string) error {
 		return ErrSessionNotFound
 	}
 
-	cmd := exec.Command("tmux", "send-keys", "-t", s.Name, keys, "Enter")
+	cmd := tmuxCmd("send-keys", "-t", s.Name, keys, "Enter")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sending keys to tmux: %w", err)
 	}
@@ -158,7 +178,7 @@ func (s *Session) CapturePane() (string, error) {
 		return "", ErrSessionNotFound
 	}
 
-	cmd := exec.Command("tmux", "capture-pane", "-t", s.Name, "-p")
+	cmd := tmuxCmd("capture-pane", "-t", s.Name, "-p")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 
@@ -176,7 +196,7 @@ func (s *Session) CapturePaneLines(n int) ([]string, error) {
 	}
 
 	// Use -S to start from n lines before the end
-	cmd := exec.Command("tmux", "capture-pane", "-t", s.Name, "-p", "-S", fmt.Sprintf("-%d", n))
+	cmd := tmuxCmd("capture-pane", "-t", s.Name, "-p", "-S", fmt.Sprintf("-%d", n))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 
@@ -260,20 +280,13 @@ func (s *Session) WaitForClaudeExit(timeout time.Duration) (string, error) {
 			continue
 		}
 
-		lines := strings.Split(strings.TrimSpace(content), "\n")
-		if len(lines) == 0 {
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		lastLine := lines[len(lines)-1]
-
 		// Claude has done something if content changed from initial
 		contentChanged := content != initialContent
 
-		// Check for shell prompt at the end - indicates Claude exited
-		// We need content to have changed (meaning Claude ran and finished)
-		if isShellPrompt(lastLine) && contentChanged {
+		// Primary detection: Check if Claude process has exited via pane_current_command
+		// This is more reliable than content-based detection because Claude Code's
+		// status bar can appear below the shell prompt
+		if contentChanged && !s.IsClaudeRunning() {
 			// Wait for stability to ensure Claude is really done
 			if content == lastContent {
 				stableCount++
@@ -284,7 +297,34 @@ func (s *Session) WaitForClaudeExit(timeout time.Duration) (string, error) {
 				stableCount = 1
 			}
 		} else {
-			stableCount = 0
+			// Fallback: Check for shell prompt in recent lines (not just last line)
+			// Claude Code's status bar can render below the prompt
+			lines := strings.Split(strings.TrimSpace(content), "\n")
+			promptFound := false
+			// Check last 10 lines for shell prompt
+			startIdx := len(lines) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			for i := startIdx; i < len(lines); i++ {
+				if isShellPrompt(lines[i]) {
+					promptFound = true
+					break
+				}
+			}
+
+			if promptFound && contentChanged {
+				if content == lastContent {
+					stableCount++
+					if stableCount >= 2 {
+						return content, nil
+					}
+				} else {
+					stableCount = 1
+				}
+			} else {
+				stableCount = 0
+			}
 		}
 
 		lastContent = content
@@ -316,31 +356,71 @@ func isShellPrompt(line string) bool {
 }
 
 // IsClaudeRunning checks if Claude appears to be running in the session.
-// Uses tmux's pane_current_command to reliably detect if Claude is running.
+// Checks both pane_current_command and child processes of the pane.
 func (s *Session) IsClaudeRunning() bool {
 	if !s.Exists() {
 		return false
 	}
 
-	// Get the current command running in the pane
-	cmd := exec.Command("tmux", "list-panes", "-t", s.Name, "-F", "#{pane_current_command}")
+	// Get the pane PID and current command
+	cmd := tmuxCmd("list-panes", "-t", s.Name, "-F", "#{pane_current_command}|#{pane_pid}")
 	out, err := cmd.Output()
 	if err != nil {
 		return true // Assume running if we can't check
 	}
 
-	command := strings.TrimSpace(string(out))
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
+	if len(parts) != 2 {
+		return true // Unexpected format, assume running
+	}
+
+	command := parts[0]
+	panePID := parts[1]
 
 	// Claude shows as version number (e.g., "2.1.30") or "claude"
-	// Shell shows as "zsh", "bash", "sh", etc.
-	shellCommands := []string{"zsh", "bash", "sh", "fish", "tcsh", "csh", "ksh"}
-	for _, shell := range shellCommands {
-		if command == shell {
-			return false // Shell is running, Claude has exited
+	// If current command is Claude, it's definitely running
+	if strings.Contains(strings.ToLower(command), "claude") || strings.Contains(command, ".") {
+		// Version numbers like "2.1.30" indicate claude is the foreground process
+		if strings.Count(command, ".") >= 1 {
+			return true
 		}
 	}
 
-	return true // Claude or other process is running
+	// If current command is a shell, Claude might still be running as a child
+	// (e.g., when using `cat file | claude`)
+	shellCommands := []string{"zsh", "bash", "sh", "fish", "tcsh", "csh", "ksh"}
+	isShell := false
+	for _, shell := range shellCommands {
+		if command == shell {
+			isShell = true
+			break
+		}
+	}
+
+	if isShell && panePID != "" {
+		// Check if claude is a child process of the pane
+		// pgrep -P returns children of the given PID
+		pgrepCmd := exec.Command("pgrep", "-P", panePID)
+		childPIDs, err := pgrepCmd.Output()
+		if err == nil && len(childPIDs) > 0 {
+			// Check each child process
+			for _, pidStr := range strings.Fields(string(childPIDs)) {
+				psCmd := exec.Command("ps", "-p", pidStr, "-o", "comm=")
+				commOut, err := psCmd.Output()
+				if err == nil {
+					comm := strings.TrimSpace(string(commOut))
+					if strings.Contains(strings.ToLower(comm), "claude") {
+						return true // Claude is a child process
+					}
+				}
+			}
+		}
+		// No claude child process found, shell is idle
+		return false
+	}
+
+	// Not a shell, something else is running - assume Claude
+	return true
 }
 
 // shellQuote quotes a string for safe shell usage.
@@ -358,7 +438,7 @@ func IsTmuxInstalled() bool {
 // ListSessions returns all tmux session names matching a prefix.
 // If prefix is empty, returns all sessions.
 func ListSessions(prefix string) ([]string, error) {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
+	cmd := tmuxCmd("list-sessions", "-F", "#{session_name}")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 
@@ -396,7 +476,7 @@ type SessionInfo struct {
 // GetSessionInfo gets info about a specific session.
 func GetSessionInfo(name string) (*SessionInfo, error) {
 	format := "#{session_name}|#{session_created}|#{session_attached}|#{session_width}|#{session_height}|#{session_activity}"
-	cmd := exec.Command("tmux", "list-sessions", "-F", format, "-f", fmt.Sprintf("#{==:#{session_name},%s}", name))
+	cmd := tmuxCmd("list-sessions", "-F", format, "-f", fmt.Sprintf("#{==:#{session_name},%s}", name))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 
@@ -432,9 +512,62 @@ func GetSessionInfo(name string) (*SessionInfo, error) {
 
 // AttachSession attaches to a tmux session (blocking, for CLI use).
 func AttachSession(name string) error {
-	cmd := exec.Command("tmux", "attach", "-t", name)
+	cmd := tmuxCmd("attach", "-t", name)
 	cmd.Stdin = nil // Will be set by the caller
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run()
+}
+
+// AttachCmd returns an exec.Cmd for attaching to a session.
+// Useful when the caller needs the command (e.g., for tea.ExecProcess).
+func AttachCmd(name string) *exec.Cmd {
+	return tmuxCmd("attach", "-t", name)
+}
+
+// SendKeysTo sends keys to a named session without requiring a Session struct.
+func SendKeysTo(sessionName string, keys ...string) error {
+	args := append([]string{"send-keys", "-t", sessionName}, keys...)
+	cmd := tmuxCmd(args...)
+	return cmd.Run()
+}
+
+// SuspendSession sends Ctrl+Z to suspend the foreground process in a session.
+func SuspendSession(sessionName string) error {
+	return SendKeysTo(sessionName, "C-z")
+}
+
+// ResumeSession sends 'fg' to resume the foreground process in a session.
+func ResumeSession(sessionName string) error {
+	return SendKeysTo(sessionName, "fg", "Enter")
+}
+
+// CapturePaneFrom captures pane content from a named session.
+func CapturePaneFrom(sessionName string, lines int) ([]byte, error) {
+	cmd := tmuxCmd("capture-pane", "-t", sessionName, "-p", "-S", fmt.Sprintf("-%d", lines))
+	return cmd.Output()
+}
+
+// KillServer terminates the entire forge tmux server.
+// This cleanly shuts down all forge sessions at once.
+func KillServer() error {
+	cmd := tmuxCmd("kill-server")
+	return cmd.Run()
+}
+
+// ServerRunning checks if the forge tmux server is running.
+func ServerRunning() bool {
+	cmd := tmuxCmd("list-sessions")
+	return cmd.Run() == nil
+}
+
+// GetSocketName returns the current tmux socket name.
+func GetSocketName() string {
+	return SocketName
+}
+
+// SetSocketName sets a custom tmux socket name.
+// Call this before any tmux operations to use a different socket.
+func SetSocketName(name string) {
+	SocketName = name
 }

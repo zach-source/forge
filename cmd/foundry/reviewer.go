@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/leader"
-	"github.com/zach-source/forge/internal/notion"
 )
 
 func newReviewerCmd() *cobra.Command {
@@ -22,14 +21,14 @@ func newReviewerCmd() *cobra.Command {
 
 The Reviewer is responsible for:
 - Reviewing code changes for quality and correctness
-- Creating Notion issues for problems found
+- Creating tasks for problems found (via foundry task add)
 - Running automated checks (tests, linters)
 - Approving or blocking merges
 
 Examples:
-  forge reviewer                   # Review current branch vs main
-  forge reviewer feature/auth      # Review specific branch
-  forge reviewer --branch develop  # Use different base branch`,
+  foundry reviewer                   # Review current branch vs main
+  foundry reviewer feature/auth      # Review specific branch
+  foundry reviewer --branch develop  # Use different base branch`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := leader.GetWorkDir()
 			if err != nil {
@@ -42,12 +41,7 @@ Examples:
 			cfg.SessionID = sessionID
 			cfg.Branch = branch
 
-			notionCfg, err := notion.Load()
-			if err != nil {
-				return err
-			}
-
-			prompt := leader.ReviewerPrompt(notionCfg.DatabaseID, workDir, branch)
+			prompt := leader.ReviewerPrompt("beads", workDir, branch)
 			return leader.Run(context.Background(), cfg, prompt, leader.ReviewerPromise())
 		},
 	}

@@ -38,7 +38,7 @@ func (p *GitHubProvider) Icon() string {
 
 // MCPServers returns the MCP servers needed for GitHub.
 func (p *GitHubProvider) MCPServers() []string {
-	return []string{"github", "graphiti", "context7"}
+	return []string{"github"}
 }
 
 // HasToken returns true if GITHUB_TOKEN is set.

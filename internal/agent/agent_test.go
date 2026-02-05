@@ -51,7 +51,8 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.SkipPermissions {
 		t.Error("Expected SkipPermissions to be true by default")
 	}
-	if len(cfg.MCPServers) == 0 {
-		t.Error("Expected default MCP servers")
+	// MCP servers should be empty by default - explicitly configured per use case
+	if cfg.MCPServers == nil {
+		t.Error("Expected MCPServers to be initialized (empty slice, not nil)")
 	}
 }

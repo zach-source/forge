@@ -37,7 +37,7 @@ func (p *NotionProvider) Icon() string {
 
 // MCPServers returns the MCP servers needed for Notion.
 func (p *NotionProvider) MCPServers() []string {
-	return []string{"notion", "graphiti", "context7"}
+	return []string{"notion"}
 }
 
 // HasToken returns true if NOTION_API_TOKEN is set.

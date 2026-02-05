@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -386,7 +385,7 @@ func (m *Model) cancelSession(id string) {
 
 // doAttach returns a command that attaches to a tmux session.
 func (m Model) doAttach(sessionName string) tea.Cmd {
-	return tea.ExecProcess(exec.Command("tmux", "attach", "-t", sessionName), func(err error) tea.Msg {
+	return tea.ExecProcess(tmux.AttachCmd(sessionName), func(err error) tea.Msg {
 		return nil
 	})
 }

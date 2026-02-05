@@ -46,11 +46,8 @@ Example:
 				}
 			}
 
-			// Parse MCP servers
+			// Parse MCP servers (empty by default)
 			servers := mcp.ParseServerList(mcpServers)
-			if len(servers) == 0 {
-				servers = []string{"graphiti", "context7"}
-			}
 
 			// Build config
 			cfg := agent.DefaultConfig()
@@ -87,7 +84,7 @@ Example:
 
 	cmd.Flags().StringVarP(&promise, "promise", "p", "", "Completion promise text (required)")
 	cmd.Flags().IntVarP(&maxIterations, "max", "m", 50, "Max iterations (0 = unlimited)")
-	cmd.Flags().StringVar(&mcpServers, "mcp", "graphiti,context7", "Comma-separated MCP servers")
+	cmd.Flags().StringVar(&mcpServers, "mcp", "", "Comma-separated MCP servers (e.g., graphiti,sequential-thinking)")
 	cmd.Flags().StringVar(&mcpConfigPath, "mcp-config", "", "Path to custom MCP config file")
 	cmd.Flags().StringVarP(&workDir, "workdir", "w", "", "Working directory (default: current)")
 	cmd.Flags().BoolVar(&noSkip, "no-skip", false, "Don't use --dangerously-skip-permissions")

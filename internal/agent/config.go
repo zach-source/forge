@@ -44,7 +44,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxIterations:   50,
-		MCPServers:      []string{"graphiti", "context7"},
+		MCPServers:      []string{}, // Empty - MCP servers should be explicitly configured
 		SkipPermissions: true,
 		PollInterval:    2 * time.Second,
 		Timeout:         30 * time.Minute,

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -499,7 +498,7 @@ Examples:
 			}
 
 			// Attach interactively
-			attachCmd := exec.Command("tmux", "attach", "-t", w.SessionID)
+			attachCmd := tmux.AttachCmd(w.SessionID)
 			attachCmd.Stdin = os.Stdin
 			attachCmd.Stdout = os.Stdout
 			attachCmd.Stderr = os.Stderr

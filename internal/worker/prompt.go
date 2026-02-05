@@ -133,7 +133,8 @@ func ContinuationPrompt(w *Worker, lastState string) string {
 	sb.WriteString("3. Continue from where you left off\n\n")
 
 	sb.WriteString("## Completion\n\n")
-	sb.WriteString(fmt.Sprintf("When complete, output: `<promise>%s</promise>`\n", WorkerPromise(w)))
+	sb.WriteString("When complete, output EXACTLY this text (including the XML tags):\n")
+	sb.WriteString(fmt.Sprintf("```\n<promise>%s</promise>\n```\n", WorkerPromise(w)))
 
 	return sb.String()
 }

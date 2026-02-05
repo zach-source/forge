@@ -12,9 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/zach-source/forge/internal/detector"
 	"github.com/zach-source/forge/internal/kanban"
 	"github.com/zach-source/forge/internal/leader"
+	"github.com/zach-source/forge/internal/supervisor/dashboard"
 	"github.com/zach-source/forge/internal/tmux"
 	"github.com/zach-source/forge/internal/worker"
 )
@@ -29,12 +32,15 @@ func newSupervisorCmd() *cobra.Command {
 		workDir              string
 		autoAssign           bool
 		withLeaders          bool
+		leadersFlag          string
+		noLeadersFlag        string
 		autoRequeue          bool
 		cleanupOrphans       bool
 		dryRun               bool
 		smartMode            bool
 		githubSync           bool
 		stateLog             string
+		dashboardMode        bool
 	)
 
 	cmd := &cobra.Command{
@@ -72,6 +78,9 @@ Examples:
 				}
 				workDir = wd
 			}
+			// Parse leader flags
+			enabledLeaders := parseLeaderFlags(leadersFlag, noLeadersFlag, withLeaders)
+
 			return runSupervisor(cmd.Context(), supervisorConfig{
 				interval:             interval,
 				analyzeInterval:      analyzeInterval,
@@ -80,13 +89,15 @@ Examples:
 				maxConcurrentWorkers: maxConcurrentWorkers,
 				workDir:              workDir,
 				autoAssign:           autoAssign,
-				withLeaders:          withLeaders,
+				withLeaders:          withLeaders || leadersFlag != "",
+				enabledLeaders:       enabledLeaders,
 				autoRequeue:          autoRequeue,
 				cleanupOrphans:       cleanupOrphans,
 				dryRun:               dryRun,
 				smartMode:            smartMode,
 				githubSync:           githubSync,
 				stateLog:             stateLog,
+				dashboardMode:        dashboardMode,
 			})
 		},
 	}
@@ -99,6 +110,9 @@ Examples:
 	cmd.Flags().StringVarP(&workDir, "dir", "d", "", "Working directory (default: current)")
 	cmd.Flags().BoolVar(&autoAssign, "auto-assign", true, "Automatically assign tasks to idle workers")
 	cmd.Flags().BoolVar(&withLeaders, "leaders", false, "Enable all leader agents (planner, reviewer, merge, deploy)")
+	cmd.Flags().StringVar(&leadersFlag, "enable-leaders", "", "Enable specific leaders (comma-separated: groomer,monitor,reviewer,planner,merge,deploy,tester,pm)")
+	cmd.Flags().StringVar(&noLeadersFlag, "disable-leaders", "", "Disable specific leaders (use with --leaders or --enable-leaders)")
+	cmd.Flags().BoolVar(&dashboardMode, "dashboard", false, "Run with live TUI dashboard")
 	cmd.Flags().BoolVar(&autoRequeue, "auto-requeue", true, "Automatically requeue stuck tasks")
 	cmd.Flags().BoolVar(&cleanupOrphans, "cleanup-orphans", true, "Clean up orphaned tmux sessions on startup (disable with --cleanup-orphans=false)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be cleaned without taking action")
@@ -118,18 +132,72 @@ type supervisorConfig struct {
 	workDir              string
 	autoAssign           bool
 	withLeaders          bool
+	enabledLeaders       map[string]bool
 	autoRequeue          bool
 	cleanupOrphans       bool
 	dryRun               bool
 	smartMode            bool
 	githubSync           bool
 	stateLog             string
+	dashboardMode        bool
 }
 
 type leaderState struct {
 	running   bool
 	sessionID string
 	startedAt time.Time
+}
+
+// allLeaderRoles lists all available leader roles.
+var allLeaderRoles = []string{"planner", "reviewer", "merge", "deploy", "groomer", "monitor", "tester", "pm", "cicd"}
+
+// parseLeaderFlags parses --enable-leaders and --disable-leaders flags.
+// Returns a map of enabled leader roles.
+func parseLeaderFlags(leadersFlag, noLeadersFlag string, withLeaders bool) map[string]bool {
+	enabled := make(map[string]bool)
+
+	// If --leaders is set, enable all
+	if withLeaders {
+		for _, role := range allLeaderRoles {
+			enabled[role] = true
+		}
+	}
+
+	// If --enable-leaders is specified, parse it
+	if leadersFlag != "" {
+		if leadersFlag == "all" {
+			for _, role := range allLeaderRoles {
+				enabled[role] = true
+			}
+		} else {
+			// Parse comma-separated list
+			for _, role := range strings.Split(leadersFlag, ",") {
+				role = strings.TrimSpace(strings.ToLower(role))
+				if role != "" {
+					enabled[role] = true
+				}
+			}
+		}
+	}
+
+	// Remove disabled leaders
+	if noLeadersFlag != "" {
+		for _, role := range strings.Split(noLeadersFlag, ",") {
+			role = strings.TrimSpace(strings.ToLower(role))
+			delete(enabled, role)
+		}
+	}
+
+	return enabled
+}
+
+// isLeaderEnabled checks if a specific leader role is enabled.
+func isLeaderEnabled(cfg supervisorConfig, role string) bool {
+	// If no leaders are enabled at all, check withLeaders flag for backwards compat
+	if len(cfg.enabledLeaders) == 0 {
+		return cfg.withLeaders
+	}
+	return cfg.enabledLeaders[strings.ToLower(role)]
 }
 
 type supervisorState struct {
@@ -153,6 +221,14 @@ type supervisorState struct {
 	deploy   leaderState
 	analyzer leaderState // for task analysis
 	groomer  leaderState // for backlog grooming
+	monitor  leaderState // for infrastructure monitoring
+	tester   leaderState // for UI/API testing
+	pm       leaderState // for project management
+	cicd     leaderState // for CI/CD monitoring and fixes
+
+	// Leader scheduling
+	leaderLastRun       map[string]time.Time // role -> last run start time
+	leadersJustFinished map[string]bool      // leaders that finished this cycle (for cooldown reset)
 
 	// Workflow tracking
 	allTasksDone    bool
@@ -162,6 +238,333 @@ type supervisorState struct {
 
 	// Analysis tracking
 	lastAnalysis time.Time // when we last ran the analyzer
+}
+
+// LeaderTrigger defines when a leader should be activated.
+type LeaderTrigger struct {
+	Role      string
+	Condition func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool
+	Cooldown  time.Duration
+}
+
+// leaderTriggers defines activation conditions and cooldowns for each leader.
+var leaderTriggers = []LeaderTrigger{
+	{
+		Role: "groomer",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			return counts[kanban.StatusBacklog] > 0 && !state.groomer.running
+		},
+		Cooldown: 15 * time.Minute,
+	},
+	{
+		Role: "reviewer",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			return counts[kanban.StatusReview] > 0 && !state.reviewer.running
+		},
+		Cooldown: 5 * time.Minute,
+	},
+	{
+		Role: "planner",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			// Run when no work in progress and we need to plan
+			needsPlanning := counts[kanban.StatusTodo] == 0 && counts[kanban.StatusInProgress] == 0 &&
+				counts[kanban.StatusReview] == 0 && counts[kanban.StatusBacklog] > 0
+			return needsPlanning && !state.planner.running && !workerActive
+		},
+		Cooldown: 20 * time.Minute,
+	},
+	{
+		Role: "deploy",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			hasMergeTasks := counts[kanban.StatusMerge] > 0
+			return hasMergeTasks && !state.deploy.running && !state.deployCompleted
+		},
+		Cooldown: 10 * time.Minute,
+	},
+	{
+		Role: "monitor",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			return !state.monitor.running // Always run if not running
+		},
+		Cooldown: 5 * time.Minute,
+	},
+	{
+		Role: "tester",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			// Run when there's active work to test
+			return counts[kanban.StatusInProgress] > 0 && !state.tester.running
+		},
+		Cooldown: 10 * time.Minute,
+	},
+	{
+		Role: "pm",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			// Run when there are done tasks to analyze
+			return counts[kanban.StatusDone] >= 3 && !state.pm.running
+		},
+		Cooldown: 30 * time.Minute,
+	},
+	{
+		Role: "cicd",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			// Run periodically to check CI health, or when deploy completes
+			return !state.cicd.running
+		},
+		Cooldown: 15 * time.Minute,
+	},
+}
+
+// shouldStartLeader checks if a leader should be started based on triggers and cooldowns.
+func shouldStartLeader(role string, counts map[kanban.Status]int, state *supervisorState, cfg supervisorConfig, workerActive bool) bool {
+	// Check if leader is enabled
+	if !isLeaderEnabled(cfg, role) {
+		return false
+	}
+
+	// Find trigger for this role
+	var trigger *LeaderTrigger
+	for i := range leaderTriggers {
+		if leaderTriggers[i].Role == role {
+			trigger = &leaderTriggers[i]
+			break
+		}
+	}
+
+	if trigger == nil {
+		return false
+	}
+
+	// Check if the condition is met first
+	conditionMet := trigger.Condition(counts, state, workerActive)
+	if !conditionMet {
+		return false
+	}
+
+	// Check cooldown - but allow faster retry if leader just finished and work still pending
+	if lastRun, ok := state.leaderLastRun[role]; ok {
+		timeSinceRun := time.Since(lastRun)
+		if timeSinceRun < trigger.Cooldown {
+			// If this leader just finished but condition still met, use shorter retry cooldown
+			if state.leadersJustFinished != nil && state.leadersJustFinished[role] {
+				// Leader finished but work still pending - use 30s retry instead of full cooldown
+				retryCooldown := 30 * time.Second
+				if timeSinceRun < retryCooldown {
+					return false
+				}
+				fmt.Printf("   🔄 %s finished but work still pending, restarting...\n", role)
+				return true
+			}
+			return false
+		}
+	}
+
+	return true
+}
+
+// recordLeaderStart records when a leader was started for cooldown tracking.
+func recordLeaderStart(state *supervisorState, role string) {
+	if state.leaderLastRun == nil {
+		state.leaderLastRun = make(map[string]time.Time)
+	}
+	state.leaderLastRun[role] = time.Now()
+}
+
+// PersistentState is saved to disk to survive supervisor restarts.
+type PersistentState struct {
+	StartedAt      time.Time               `json:"started_at"`
+	LastCycle      time.Time               `json:"last_cycle"`
+	CycleCount     int                     `json:"cycle_count"`
+	Leaders        map[string]LeaderPState `json:"leaders"`
+	TaskWorkers    map[string]string       `json:"task_workers"`    // taskID -> workerID
+	CompletedTasks map[string]time.Time    `json:"completed_tasks"` // taskID -> completion time
+	LeaderLastRun  map[string]time.Time    `json:"leader_last_run"` // role -> last run time
+}
+
+// LeaderPState is the persisted state for a single leader.
+type LeaderPState struct {
+	Running    bool      `json:"running"`
+	SessionID  string    `json:"session_id"`
+	StartedAt  time.Time `json:"started_at"`
+	LastActive time.Time `json:"last_active"`
+	CycleCount int       `json:"cycle_count"` // cycles since leader started
+}
+
+// supervisorStatePath returns the path to the supervisor state file.
+func supervisorStatePath(workDir string) string {
+	return filepath.Join(workDir, ".forge", "supervisor", "state.json")
+}
+
+// loadSupervisorState loads persisted state from disk.
+func loadSupervisorState(workDir string) (*PersistentState, error) {
+	path := supervisorStatePath(workDir)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No state file yet
+		}
+		return nil, fmt.Errorf("reading state file: %w", err)
+	}
+
+	var ps PersistentState
+	if err := json.Unmarshal(data, &ps); err != nil {
+		return nil, fmt.Errorf("parsing state file: %w", err)
+	}
+
+	return &ps, nil
+}
+
+// saveSupervisorState saves persisted state to disk.
+func saveSupervisorState(workDir string, ps *PersistentState) error {
+	path := supervisorStatePath(workDir)
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(ps, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling state: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing state file: %w", err)
+	}
+
+	return nil
+}
+
+// syncStateFromPersisted restores supervisor state from persisted state on startup.
+func syncStateFromPersisted(state *supervisorState, ps *PersistentState, reg *worker.Registry) {
+	if ps == nil {
+		return
+	}
+
+	// Restore task workers mapping
+	for taskID, workerID := range ps.TaskWorkers {
+		state.taskWorkers[taskID] = workerID
+		state.workerTasks[workerID] = taskID
+	}
+
+	// Restore completed tasks (convert time map to bool map)
+	for taskID, completedAt := range ps.CompletedTasks {
+		state.completedTasks[taskID] = true
+		state.taskCompleted[taskID] = completedAt
+	}
+
+	// Restore leader last run times for cooldowns
+	for role, lastRun := range ps.LeaderLastRun {
+		state.leaderLastRun[role] = lastRun
+	}
+
+	// Validate and restore leader states (check if sessions still exist)
+	for role, lps := range ps.Leaders {
+		if !lps.Running || lps.SessionID == "" {
+			continue
+		}
+
+		// Check if session still exists
+		session := tmux.NewSession(lps.SessionID, "", "")
+		if !session.Exists() {
+			fmt.Printf("⚠️  Persisted %s session no longer exists\n", role)
+			continue
+		}
+
+		// Restore leader state
+		ls := getLeaderStateByRole(state, role)
+		if ls != nil {
+			ls.running = true
+			ls.sessionID = lps.SessionID
+			ls.startedAt = lps.StartedAt
+			fmt.Printf("✅ Restored %s leader state (session: %s)\n", role, lps.SessionID)
+		}
+	}
+}
+
+// getLeaderStateByRole returns a pointer to the leaderState for a given role.
+func getLeaderStateByRole(state *supervisorState, role string) *leaderState {
+	switch role {
+	case "planner":
+		return &state.planner
+	case "reviewer":
+		return &state.reviewer
+	case "merge":
+		return &state.merge
+	case "deploy":
+		return &state.deploy
+	case "groomer":
+		return &state.groomer
+	case "monitor":
+		return &state.monitor
+	case "tester":
+		return &state.tester
+	case "pm":
+		return &state.pm
+	case "analyzer":
+		return &state.analyzer
+	default:
+		return nil
+	}
+}
+
+// buildPersistentState creates a PersistentState from current supervisor state.
+func buildPersistentState(state *supervisorState, startedAt time.Time, cycleCount int) *PersistentState {
+	ps := &PersistentState{
+		StartedAt:      startedAt,
+		LastCycle:      time.Now(),
+		CycleCount:     cycleCount,
+		Leaders:        make(map[string]LeaderPState),
+		TaskWorkers:    make(map[string]string),
+		CompletedTasks: make(map[string]time.Time),
+		LeaderLastRun:  make(map[string]time.Time),
+	}
+
+	// Copy task workers
+	for k, v := range state.taskWorkers {
+		ps.TaskWorkers[k] = v
+	}
+
+	// Copy completed tasks with timestamps
+	for taskID := range state.completedTasks {
+		if completedAt, ok := state.taskCompleted[taskID]; ok {
+			ps.CompletedTasks[taskID] = completedAt
+		} else {
+			ps.CompletedTasks[taskID] = time.Now()
+		}
+	}
+
+	// Copy leader last run times
+	for k, v := range state.leaderLastRun {
+		ps.LeaderLastRun[k] = v
+	}
+
+	// Build leader states
+	leaders := []struct {
+		role  string
+		state *leaderState
+	}{
+		{"planner", &state.planner},
+		{"reviewer", &state.reviewer},
+		{"merge", &state.merge},
+		{"deploy", &state.deploy},
+		{"groomer", &state.groomer},
+		{"monitor", &state.monitor},
+		{"tester", &state.tester},
+		{"pm", &state.pm},
+		{"analyzer", &state.analyzer},
+	}
+
+	for _, l := range leaders {
+		ps.Leaders[l.role] = LeaderPState{
+			Running:    l.state.running,
+			SessionID:  l.state.sessionID,
+			StartedAt:  l.state.startedAt,
+			LastActive: time.Now(),
+		}
+	}
+
+	return ps
 }
 
 func newSupervisorState() *supervisorState {
@@ -174,6 +577,7 @@ func newSupervisorState() *supervisorState {
 		taskCompleted:        make(map[string]time.Time),
 		lastPaneOutput:       make(map[string]string),
 		unchangedOutputCount: make(map[string]int),
+		leaderLastRun:        make(map[string]time.Time),
 	}
 }
 
@@ -201,6 +605,12 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 		}
 
 		if reason != "" {
+			// For leaders, check if they actually completed by looking for promise
+			promiseFound := false
+			if isLeaderRole(w.Role) {
+				promiseFound = checkLeaderPromise(w, session, sessionExists)
+			}
+
 			// For development workers with tasks, move to review before resetting
 			taskID := w.CurrentTask
 			if w.Role == worker.RoleWorker && taskID != "" && !state.completedTasks[taskID] {
@@ -212,6 +622,12 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 				} else {
 					fmt.Printf("   📋 Moved task to Review\n")
 					state.completedTasks[taskID] = true
+				}
+			} else if isLeaderRole(w.Role) {
+				if promiseFound {
+					fmt.Printf("✅ Leader %s completed (%s)\n", w.DisplayName(), reason)
+				} else {
+					fmt.Printf("⚠️  Leader %s exited without completion promise (%s)\n", w.DisplayName(), reason)
 				}
 			} else {
 				fmt.Printf("🔄 Resetting stale worker %s (%s)\n", w.DisplayName(), reason)
@@ -226,7 +642,7 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 			}
 
 			// Clear any leader state if this was a leader
-			clearLeaderState(w.Role, state)
+			clearLeaderState(w.Role, state, promiseFound)
 
 			// Clear task tracking state
 			if taskID != "" {
@@ -238,9 +654,62 @@ func checkWorkerHealth(reg *worker.Registry, state *supervisorState, store *kanb
 	}
 }
 
+// isLeaderRole returns true if the role is a leader type (not a regular worker).
+func isLeaderRole(role worker.Role) bool {
+	switch role {
+	case worker.RolePlanner, worker.RoleReviewer, worker.RoleMerge, worker.RoleDeploy, worker.RoleGroomer:
+		return true
+	default:
+		return false
+	}
+}
+
+// checkLeaderPromise checks if a leader session output contains its completion promise.
+func checkLeaderPromise(w *worker.Worker, session *tmux.Session, sessionExists bool) bool {
+	// Determine the expected promise based on role
+	var expectedPromise string
+	switch w.Role {
+	case worker.RolePlanner:
+		expectedPromise = leader.PromisePlanner
+	case worker.RoleReviewer:
+		expectedPromise = leader.PromiseReviewer
+	case worker.RoleMerge:
+		expectedPromise = leader.PromiseMerge
+	case worker.RoleDeploy:
+		expectedPromise = leader.PromiseDeploy
+	case worker.RoleGroomer:
+		expectedPromise = leader.PromiseGroomer
+	default:
+		return false
+	}
+
+	d := detector.New(expectedPromise)
+
+	// Try to get output from log file first (more reliable)
+	logPath := worker.LogPath(w)
+	if logPath != "" {
+		if content, err := os.ReadFile(logPath); err == nil && len(content) > 0 {
+			if d.IsComplete(string(content)) {
+				return true
+			}
+		}
+	}
+
+	// Fall back to capturing pane if session still exists
+	if sessionExists {
+		if content, err := session.CapturePane(); err == nil && content != "" {
+			if d.IsComplete(content) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // clearLeaderState clears the in-memory leader state for a given role.
-// Also sets workflow completion flags for merge/deploy.
-func clearLeaderState(role worker.Role, state *supervisorState) {
+// Only sets workflow completion flags for merge/deploy if promiseFound is true.
+func clearLeaderState(role worker.Role, state *supervisorState, promiseFound bool) {
 	switch role {
 	case worker.RolePlanner:
 		state.planner.running = false
@@ -251,13 +720,21 @@ func clearLeaderState(role worker.Role, state *supervisorState) {
 	case worker.RoleMerge:
 		state.merge.running = false
 		state.merge.sessionID = ""
-		state.mergeCompleted = true
-		fmt.Printf("   ✅ Merge workflow completed\n")
+		if promiseFound {
+			state.mergeCompleted = true
+			fmt.Printf("   ✅ Merge workflow completed (promise found)\n")
+		} else {
+			fmt.Printf("   ⚠️  Merge session ended without completing\n")
+		}
 	case worker.RoleDeploy:
 		state.deploy.running = false
 		state.deploy.sessionID = ""
-		state.deployCompleted = true
-		fmt.Printf("   ✅ Deploy workflow completed\n")
+		if promiseFound {
+			state.deployCompleted = true
+			fmt.Printf("   ✅ Deploy workflow completed (promise found)\n")
+		} else {
+			fmt.Printf("   ⚠️  Deploy session ended without completing\n")
+		}
 	case worker.RoleGroomer:
 		state.groomer.running = false
 		state.groomer.sessionID = ""
@@ -419,13 +896,40 @@ func cleanupOrphanedSessions(reg *worker.Registry, dryRun bool) {
 	}
 }
 
+// runDashboardMode runs the supervisor with a live TUI dashboard.
+func runDashboardMode(cfg supervisorConfig) error {
+	m := dashboard.NewModel(cfg.workDir)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
 func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
+	// Dashboard mode - run TUI instead of standard output
+	if cfg.dashboardMode {
+		return runDashboardMode(cfg)
+	}
+
 	fmt.Printf("🎯 Supervisor starting\n")
 	fmt.Printf("   Interval: %s\n", cfg.interval)
 	fmt.Printf("   Work dir: %s\n", cfg.workDir)
 	fmt.Printf("   Max workers: %d\n", cfg.maxConcurrentWorkers)
 	fmt.Printf("   Auto-assign: %v\n", cfg.autoAssign)
-	fmt.Printf("   Leaders: %v\n", cfg.withLeaders)
+
+	// Display enabled leaders
+	if len(cfg.enabledLeaders) > 0 {
+		var enabled []string
+		for _, role := range allLeaderRoles {
+			if cfg.enabledLeaders[role] {
+				enabled = append(enabled, role)
+			}
+		}
+		fmt.Printf("   Leaders: %s\n", strings.Join(enabled, ", "))
+	} else if cfg.withLeaders {
+		fmt.Printf("   Leaders: all\n")
+	} else {
+		fmt.Printf("   Leaders: none\n")
+	}
 	fmt.Printf("   Press Ctrl+C to stop\n\n")
 
 	// Set up signal handling
@@ -441,12 +945,25 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 	}()
 
 	state := newSupervisorState()
+	startedAt := time.Now()
+	cycleCount := 0
 
 	// Load registry for startup initialization
 	reg, err := worker.LoadRegistry()
 	if err != nil {
 		fmt.Printf("⚠️  Error loading workers for startup: %v\n", err)
 	} else {
+		// Try to load persisted state
+		fmt.Println("🔄 Checking for persisted state...")
+		if ps, err := loadSupervisorState(cfg.workDir); err != nil {
+			fmt.Printf("⚠️  Error loading persisted state: %v\n", err)
+		} else if ps != nil {
+			startedAt = ps.StartedAt
+			cycleCount = ps.CycleCount
+			syncStateFromPersisted(state, ps, reg)
+			fmt.Printf("✅ Restored state from previous session (cycle %d)\n", cycleCount)
+		}
+
 		// Sync leader state from registry (recovers state after restart)
 		fmt.Println("🔄 Checking for running leaders...")
 		syncLeaderStateFromRegistry(reg, state)
@@ -468,15 +985,32 @@ func runSupervisor(ctx context.Context, cfg supervisorConfig) error {
 		cycleFunc = runSmartCycle
 	}
 
+	// Helper to run cycle and save state
+	runAndSave := func() {
+		cycleCount++
+		cycleFunc(cfg, state)
+
+		// Save state after each cycle
+		ps := buildPersistentState(state, startedAt, cycleCount)
+		if err := saveSupervisorState(cfg.workDir, ps); err != nil {
+			fmt.Printf("⚠️  Error saving state: %v\n", err)
+		}
+	}
+
 	// Initial run
-	cycleFunc(cfg, state)
+	runAndSave()
 
 	for {
 		select {
 		case <-ctx.Done():
+			// Save final state on shutdown
+			ps := buildPersistentState(state, startedAt, cycleCount)
+			if err := saveSupervisorState(cfg.workDir, ps); err != nil {
+				fmt.Printf("⚠️  Error saving final state: %v\n", err)
+			}
 			return nil
 		case <-ticker.C:
-			cycleFunc(cfg, state)
+			runAndSave()
 		}
 	}
 }
@@ -531,7 +1065,7 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 
 	// 6. Run leader workflow if enabled
 	if cfg.withLeaders {
-		runLeaderWorkflow(store, reg, state, cfg.workDir)
+		runLeaderWorkflow(store, reg, state, cfg)
 	}
 
 	// 7. Run task analyzer if needed (check for new tasks from completed work)
@@ -609,11 +1143,44 @@ func checkCompletedWorkers(store *kanban.Store, reg *worker.Registry, state *sup
 	}
 }
 
+// checkStaleReviewTasks checks for tasks stuck in review and auto-moves them to merge queue.
+// This handles infrastructure tasks and other non-code tasks that don't have branches to merge.
+func checkStaleReviewTasks(store *kanban.Store, state *supervisorState) {
+	reviewTasks, err := store.List(kanban.StatusReview)
+	if err != nil {
+		return
+	}
+
+	staleThreshold := 30 * time.Minute // Tasks in review for > 30 minutes are considered stale
+	for _, task := range reviewTasks {
+		// Check if task has been completed and is waiting in review
+		if completedAt, ok := state.taskCompleted[task.ID]; ok {
+			timeSinceCompletion := time.Since(completedAt)
+			if timeSinceCompletion > staleThreshold {
+				// Task has been in review for too long after worker completion
+				// This likely means the reviewer approved it but didn't move it
+				// OR the task doesn't have code to merge (infrastructure task)
+				fmt.Printf("   ⏰ Task %s stuck in review for %v\n", task.ID[:12], timeSinceCompletion.Truncate(time.Minute))
+
+				// Auto-move to merge queue for deployment verification
+				if err := store.Move(task.ID, kanban.StatusMerge); err != nil {
+					fmt.Printf("      ⚠️  Could not auto-move to merge: %v\n", err)
+				} else {
+					fmt.Printf("      📋 Auto-moved to merge queue for deployment verification\n")
+				}
+			}
+		}
+	}
+}
+
 // analyzeAndRequeueTasks checks for tasks that are stuck or abandoned and requeues them
 func analyzeAndRequeueTasks(store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
 	if !cfg.autoRequeue {
 		return
 	}
+
+	// First, check for stale review tasks that need auto-progression
+	checkStaleReviewTasks(store, state)
 
 	// Get all in_progress tasks
 	inProgressTasks, err := store.List(kanban.StatusInProgress)
@@ -766,8 +1333,11 @@ func checkForNewTasks(store *kanban.Store, reg *worker.Registry, state *supervis
 }
 
 func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
+	// Track which leaders finished this cycle for cooldown reset
+	leadersFinished := make(map[string]bool)
+
 	// Check each leader type
-	checkLeader := func(role worker.Role, ls *leaderState, name string) {
+	checkLeader := func(role worker.Role, ls *leaderState, name string, roleKey string) {
 		if !ls.running {
 			return
 		}
@@ -775,6 +1345,7 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 		session := tmux.NewSession(ls.sessionID, "", "")
 		if !session.Exists() {
 			fmt.Printf("🏁 %s finished\n", name)
+			leadersFinished[roleKey] = true
 
 			// Set completion flags for merge and deploy
 			switch role {
@@ -804,11 +1375,15 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 		}
 	}
 
-	checkLeader(worker.RolePlanner, &state.planner, "Planner")
-	checkLeader(worker.RoleReviewer, &state.reviewer, "Reviewer")
-	checkLeader(worker.RoleMerge, &state.merge, "Merge leader")
-	checkLeader(worker.RoleDeploy, &state.deploy, "Deploy leader")
-	checkLeader(worker.RoleGroomer, &state.groomer, "Groomer")
+	checkLeader(worker.RolePlanner, &state.planner, "Planner", "planner")
+	checkLeader(worker.RoleReviewer, &state.reviewer, "Reviewer", "reviewer")
+	checkLeader(worker.RoleMerge, &state.merge, "Merge leader", "merge")
+	checkLeader(worker.RoleDeploy, &state.deploy, "Deploy leader", "deploy")
+	checkLeader(worker.RoleGroomer, &state.groomer, "Groomer", "groomer")
+	checkLeader(worker.RoleMonitor, &state.monitor, "Monitor", "monitor")
+	checkLeader(worker.RoleTester, &state.tester, "Tester", "tester")
+	checkLeader(worker.RolePM, &state.pm, "Project Manager", "pm")
+	checkLeader(worker.RoleCICD, &state.cicd, "CI/CD Leader", "cicd")
 
 	// Analyzer uses planner role but different state
 	if state.analyzer.running {
@@ -819,6 +1394,9 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 			state.analyzer.sessionID = ""
 		}
 	}
+
+	// Store finished leaders for cooldown reset in next cycle
+	state.leadersJustFinished = leadersFinished
 }
 
 func pokeActiveWorkers(reg *worker.Registry, state *supervisorState, maxPokes int) {
@@ -908,8 +1486,7 @@ func shouldPokeWorker(session *tmux.Session, w *worker.Worker, state *supervisor
 
 // captureRecentOutput captures recent lines from the tmux pane.
 func captureRecentOutput(session *tmux.Session, lines int) string {
-	cmd := exec.Command("tmux", "capture-pane", "-t", session.Name, "-p", "-S", fmt.Sprintf("-%d", lines))
-	out, err := cmd.Output()
+	out, err := tmux.CapturePaneFrom(session.Name, lines)
 	if err != nil {
 		return ""
 	}
@@ -1150,13 +1727,14 @@ func assignTasks(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 	}
 }
 
-func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string) {
+func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervisorState, cfg supervisorConfig) {
 	fmt.Printf("   🔄 Running leader workflow...\n")
 	board, err := store.GetBoard()
 	if err != nil {
 		return
 	}
 
+	workDir := cfg.workDir
 	counts := make(map[kanban.Status]int)
 	for _, col := range board.Columns {
 		counts[col.Status] = len(col.Issues)
@@ -1174,28 +1752,7 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 		}
 	}
 
-	// 1. GROOMER: Run when there are items in backlog (can run alongside workers)
-	// Groomer researches and details backlog items, moving ready ones to todo
-	if counts[kanban.StatusBacklog] > 0 && !state.groomer.running {
-		startGroomer(store, reg, state, workDir, board)
-		// Don't return - groomer runs in parallel, continue checking other leaders
-	}
-
-	// 2. REVIEWER: Run when there are tasks in review (can run alongside workers)
-	if counts[kanban.StatusReview] > 0 && !state.reviewer.running {
-		startReviewer(store, reg, state, workDir, board)
-		// Don't return - reviewer can run parallel with merge leader
-	}
-
-	// 3. PLANNER: Run when no work in progress and we need to plan
-	needsPlanning := counts[kanban.StatusTodo] == 0 && counts[kanban.StatusInProgress] == 0 &&
-		counts[kanban.StatusReview] == 0 && counts[kanban.StatusBacklog] > 0
-	if needsPlanning && !state.planner.running && !workerActive {
-		startPlanner(store, reg, state, workDir, board)
-		return
-	}
-
-	// 4. Check if there are tasks in merge queue
+	// Calculate workflow state for deploy
 	mergeCount := counts[kanban.StatusMerge]
 	hasMergeTasks := mergeCount > 0
 	doneCount := counts[kanban.StatusDone]
@@ -1203,29 +1760,69 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 		counts[kanban.StatusInProgress] + counts[kanban.StatusReview] + counts[kanban.StatusMerge]
 	state.allTasksDone = pendingWork == 0 && doneCount > 0
 
-	// Reset mergeCompleted if new tasks moved to merge queue (allows merge for new work)
-	if mergeCount > state.lastMergeCount && state.mergeCompleted {
-		fmt.Printf("🔄 New tasks ready for merge, resetting merge state\n")
-		state.mergeCompleted = false
+	// Reset deployCompleted if there are tasks in merge queue
+	if hasMergeTasks && state.deployCompleted {
+		fmt.Printf("🔄 Merge queue has work, resetting deploy state\n")
+		state.deployCompleted = false
 	}
-	state.lastMergeCount = mergeCount
 
-	// 5. MERGE: Run when there are tasks in merge queue (can run alongside workers)
-	// The merge leader will merge task branches and move them to done
-	// Don't restart if merge already completed (prevents infinite loop)
+	// Log merge queue status
 	if mergeCount > 0 {
-		fmt.Printf("   📊 Merge queue: %d tasks (running=%v, completed=%v)\n", mergeCount, state.merge.running, state.mergeCompleted)
-	}
-	if hasMergeTasks && !state.merge.running && !state.mergeCompleted {
-		startMerge(store, reg, state, workDir, board)
-		// Don't return - allow other leaders to run too
+		fmt.Printf("   📊 Merge queue: %d tasks (running=%v, completed=%v)\n", mergeCount, state.deploy.running, state.deployCompleted)
 	}
 
-	// 6. DEPLOY: Run after merge is completed (and all tasks done)
-	if state.mergeCompleted && state.allTasksDone && !state.deployCompleted && !state.deploy.running {
-		startDeploy(store, reg, state, workDir, board)
-		return
+	// Use smart leader scheduling with triggers and cooldowns
+	// 1. GROOMER: Run when there are items in backlog
+	if shouldStartLeader("groomer", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "groomer")
+		startGroomer(store, reg, state, workDir, board)
 	}
+
+	// 2. REVIEWER: Run when there are tasks in review
+	if shouldStartLeader("reviewer", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "reviewer")
+		startReviewer(store, reg, state, workDir, board)
+	}
+
+	// 3. PLANNER: Run when no work in progress and we need to plan
+	if shouldStartLeader("planner", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "planner")
+		startPlanner(store, reg, state, workDir, board)
+		return // Planner blocks other leaders
+	}
+
+	// 4. DEPLOY: Run when there are tasks in merge queue
+	if shouldStartLeader("deploy", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "deploy")
+		startDeploy(store, reg, state, workDir, board)
+	}
+
+	// 5. MONITOR: Run continuously to observe infrastructure health
+	if shouldStartLeader("monitor", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "monitor")
+		startMonitor(reg, state, workDir)
+	}
+
+	// 6. TESTER: Run when there's active work to test
+	if shouldStartLeader("tester", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "tester")
+		startTester(reg, state, workDir)
+	}
+
+	// 7. PM: Run when there are done tasks to analyze
+	if shouldStartLeader("pm", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "pm")
+		startPM(store, reg, state, workDir, board)
+	}
+
+	// 8. CICD: Run periodically to check CI health
+	if shouldStartLeader("cicd", counts, state, cfg, workerActive) {
+		recordLeaderStart(state, "cicd")
+		startCICD(reg, state, workDir)
+	}
+
+	// Update lastMergeCount after all checks
+	state.lastMergeCount = mergeCount
 }
 
 func findIdleLeader(reg *worker.Registry, role worker.Role) *worker.Worker {
@@ -1244,13 +1841,23 @@ func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDi
 	ls.startedAt = time.Now()
 
 	// Determine worktree for this leader
-	// Merge and deploy need main worktree; others can use dedicated worktrees
 	leaderWorkDir := workDir
-	if w.Role == worker.RoleGroomer || w.Role == worker.RoleReviewer || w.Role == worker.RolePlanner {
+
+	// First, find the git repo (workspace may have repo in .forge/repos/)
+	gitRepo, err := findGitRepo(workDir)
+	if err == nil {
+		leaderWorkDir = gitRepo
+	}
+
+	// Groomer, reviewer, planner, monitor, tester, pm use dedicated worktrees; merge, deploy work in main repo
+	if w.Role == worker.RoleGroomer || w.Role == worker.RoleReviewer || w.Role == worker.RolePlanner || w.Role == worker.RoleMonitor || w.Role == worker.RoleTester || w.Role == worker.RolePM {
 		if wt, err := createLeaderWorktree(workDir, string(w.Role)); err == nil {
 			leaderWorkDir = wt
 			fmt.Printf("   📁 Using worktree: %s\n", wt)
 		}
+	} else if w.Role == worker.RoleMerge || w.Role == worker.RoleDeploy {
+		// Merge and deploy work in main git repo (need to push to main)
+		fmt.Printf("   📂 Working in git repo: %s\n", leaderWorkDir)
 	}
 
 	go func() {
@@ -1259,6 +1866,17 @@ func startLeader(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDi
 			Worktree: leaderWorkDir,
 			Prompt:   prompt,
 			Promise:  promise,
+		}
+
+		// Continuous leaders get high iteration limits
+		// They run in a ralph loop until work is exhausted
+		switch w.Role {
+		case worker.RoleGroomer, worker.RoleReviewer, worker.RoleDeploy, worker.RoleMonitor, worker.RoleTester, worker.RolePM:
+			opts.MaxIterations = 500 // High limit for continuous operation
+		case worker.RolePlanner, worker.RoleMerge:
+			opts.MaxIterations = 200 // Moderate for planning/merge
+		default:
+			opts.MaxIterations = 100 // Default
 		}
 
 		ctx := context.Background()
@@ -1279,7 +1897,21 @@ func startReviewer(store *kanban.Store, reg *worker.Registry, state *supervisorS
 
 	fmt.Printf("🔍 Starting reviewer %s\n", w.DisplayName())
 
-	prompt := buildReviewerPrompt(board, workDir)
+	// Try to load custom prompt from .forge/prompts/reviewer.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("reviewer")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading reviewer prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildReviewQueueSection(board, workDir)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildReviewerPrompt(board, workDir)
+	}
+
 	startLeader(reg, w, &state.reviewer, workDir, prompt, leader.PromiseReviewer)
 }
 
@@ -1293,7 +1925,21 @@ func startPlanner(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 
 	fmt.Printf("📋 Starting planner %s\n", w.DisplayName())
 
-	prompt := buildPlannerPrompt(board, workDir)
+	// Try to load custom prompt from .forge/prompts/planner.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("planner")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading planner prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildBoardStateSection(board, workDir, leader.PromisePlanner)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildPlannerPrompt(board, workDir)
+	}
+
 	startLeader(reg, w, &state.planner, workDir, prompt, leader.PromisePlanner)
 }
 
@@ -1307,7 +1953,21 @@ func startMerge(store *kanban.Store, reg *worker.Registry, state *supervisorStat
 
 	fmt.Printf("🔀 Starting merge leader %s\n", w.DisplayName())
 
-	prompt := buildMergePrompt(board, workDir)
+	// Try to load custom prompt from .forge/prompts/merge.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("merge")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading merge prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildMergeQueueSection(board, workDir)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildMergePrompt(board, workDir)
+	}
+
 	startLeader(reg, w, &state.merge, workDir, prompt, leader.PromiseMerge)
 }
 
@@ -1321,7 +1981,21 @@ func startDeploy(store *kanban.Store, reg *worker.Registry, state *supervisorSta
 
 	fmt.Printf("🚀 Starting deploy leader %s\n", w.DisplayName())
 
-	prompt := buildDeployPrompt(board, workDir)
+	// Try to load custom prompt from .forge/prompts/deploy.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("deploy")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading deploy prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildDoneTasksSection(board, workDir)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildDeployPrompt(board, workDir)
+	}
+
 	startLeader(reg, w, &state.deploy, workDir, prompt, leader.PromiseDeploy)
 }
 
@@ -1335,11 +2009,137 @@ func startGroomer(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 
 	fmt.Printf("🧹 Starting backlog groomer %s\n", w.DisplayName())
 
-	prompt := buildGroomerPrompt(board, workDir)
+	// Try to load custom prompt from .forge/prompts/groomer.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("groomer")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading groomer prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildBacklogSection(board, workDir)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildGroomerPrompt(board, workDir)
+	}
+
 	startLeader(reg, w, &state.groomer, workDir, prompt, leader.PromiseGroomer)
 }
 
+func startMonitor(reg *worker.Registry, state *supervisorState, workDir string) {
+	w := findIdleLeader(reg, worker.RoleMonitor)
+	if w == nil {
+		// Monitor is optional - don't warn if not configured
+		return
+	}
+
+	fmt.Printf("📡 Starting infrastructure monitor %s\n", w.DisplayName())
+
+	// Try to load custom prompt from .forge/prompts/monitor.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("monitor")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading monitor prompt: %v\n", err)
+		return
+	}
+
+	// If no custom prompt, use default
+	if prompt == "" {
+		prompt = buildMonitorPrompt(workDir)
+	}
+
+	startLeader(reg, w, &state.monitor, workDir, prompt, leader.PromiseMonitor)
+}
+
+func startTester(reg *worker.Registry, state *supervisorState, workDir string) {
+	w := findIdleLeader(reg, worker.RoleTester)
+	if w == nil {
+		// Tester is optional - don't warn if not configured
+		return
+	}
+
+	fmt.Printf("🧪 Starting UI/API tester %s\n", w.DisplayName())
+
+	// Try to load custom prompt from .forge/prompts/tester.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("tester")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading tester prompt: %v\n", err)
+		return
+	}
+
+	// If no custom prompt, use default
+	if prompt == "" {
+		prompt = buildTesterPrompt(workDir)
+	}
+
+	startLeader(reg, w, &state.tester, workDir, prompt, leader.PromiseTester)
+}
+
+func startPM(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board) {
+	w := findIdleLeader(reg, worker.RolePM)
+	if w == nil {
+		// PM is optional - don't warn if not configured
+		return
+	}
+
+	fmt.Printf("📊 Starting Project Manager %s\n", w.DisplayName())
+
+	// Try to load custom prompt from .forge/prompts/pm.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("pm")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading PM prompt: %v\n", err)
+		return
+	}
+
+	// If custom prompt found, append dynamic board state
+	if prompt != "" {
+		prompt += "\n\n" + buildDoneTasksSection(board, workDir)
+	} else {
+		// Fall back to built-in prompt
+		prompt = buildPMPrompt(board, workDir)
+	}
+
+	startLeader(reg, w, &state.pm, workDir, prompt, leader.PromisePM)
+}
+
+func startCICD(reg *worker.Registry, state *supervisorState, workDir string) {
+	w := findIdleLeader(reg, worker.RoleCICD)
+	if w == nil {
+		// CICD is optional - don't warn if not configured
+		return
+	}
+
+	fmt.Printf("🔧 Starting CI/CD Leader %s\n", w.DisplayName())
+
+	// Try to load custom prompt from .forge/prompts/cicd.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("cicd")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading CICD prompt: %v\n", err)
+		return
+	}
+
+	// If custom prompt found, use it; otherwise use built-in
+	if prompt == "" {
+		prompt = buildCICDPrompt(workDir)
+	}
+
+	startLeader(reg, w, &state.cicd, workDir, prompt, leader.PromiseCICD)
+}
+
 // Prompt builders for each leader role
+
+// extractTaskSuffix extracts the suffix from a task ID (e.g., "blocks-forge-abc" -> "abc")
+func extractTaskSuffix(taskID string) string {
+	parts := strings.Split(taskID, "-")
+	if len(parts) >= 3 {
+		return parts[len(parts)-1]
+	}
+	return taskID
+}
 
 func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
@@ -1351,10 +2151,9 @@ func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 	for _, col := range board.Columns {
 		if col.Status == kanban.StatusReview {
 			for _, issue := range col.Issues {
-				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
-				if issue.Description != "" {
-					sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
-				}
+				// Include full task ID and branch suffix so reviewer can run foundry task move <id>
+				suffix := extractTaskSuffix(issue.ID)
+				sb.WriteString(fmt.Sprintf("- [%s] **%s** (branch: task/%s): %s\n", issue.Priority, issue.ID, suffix, issue.Title))
 				reviewCount++
 			}
 		}
@@ -1365,33 +2164,88 @@ func buildReviewerPrompt(board *kanban.Board, workDir string) string {
 
 	sb.WriteString("\n## Review Checklist\n\n")
 	sb.WriteString("For each task, verify:\n")
-	sb.WriteString("- [ ] Code compiles/runs without errors\n")
-	sb.WriteString("- [ ] Tests pass (if applicable)\n")
+	sb.WriteString("- [ ] **CI/CD PASSES**: Run `gh run list --branch task/<suffix>` to check CI status\n")
+	sb.WriteString("- [ ] Code compiles/runs without errors (`go build ./...`)\n")
+	sb.WriteString("- [ ] Tests pass (`go test ./...`)\n")
 	sb.WriteString("- [ ] Code follows project conventions\n")
 	sb.WriteString("- [ ] No obvious bugs or security issues\n")
 	sb.WriteString("- [ ] Changes match the task description\n\n")
+	sb.WriteString("**IMPORTANT**: Do NOT approve tasks with failing CI. If CI fails, REJECT the task.\n\n")
+
+	sb.WriteString("## Viewing Task Details\n\n")
+	sb.WriteString("Use these commands to inspect tasks:\n")
+	sb.WriteString("- `foundry task show <id>` - Full task details (description, labels, branch)\n")
+	sb.WriteString("- `foundry task diff <id>` - See code changes for a task\n")
+	sb.WriteString("- `foundry task log <id>` - Git commit history for a task\n")
+	sb.WriteString("- `foundry task branches` - List all task branches with status\n")
+	sb.WriteString("- `foundry task list --status review` - List tasks in review queue\n\n")
 
 	sb.WriteString("## Parallel Workflow\n\n")
 	sb.WriteString("Workers run in parallel, each in their own worktree with a task branch.\n")
-	sb.WriteString("- Task branches follow pattern: `task/<task-id-first-8-chars>`\n")
-	sb.WriteString("- List task branches: `git branch | grep task/`\n")
-	sb.WriteString("- Review a branch: `git log main..task/<id>` and `git diff main..task/<id>`\n")
+	sb.WriteString("- Task branches follow pattern: `task/<task-id-suffix>`\n")
+	sb.WriteString("- Review a branch: `foundry task diff <id>` or `foundry task log <id>`\n")
 	sb.WriteString("- Workers may still be active - review completed work as it arrives\n\n")
 
-	sb.WriteString("## Your Tasks\n\n")
-	sb.WriteString("1. Check handoffs from workers: `search_memory_facts({ query: \"forge-handoff TO: reviewer\" })`\n")
-	sb.WriteString("2. List task branches and match to review queue: `git branch | grep task/`\n")
-	sb.WriteString("3. For each task in review:\n")
-	sb.WriteString("   - Check branch: `git log main..task/<id> --oneline`\n")
-	sb.WriteString("   - Review changes: `git diff main..task/<id>`\n")
-	sb.WriteString("   - Run tests on the branch if needed\n")
-	sb.WriteString("4. **APPROVED**: `foundry kanban move <id> m` (moves to merge queue)\n")
-	sb.WriteString("5. **REJECTED**: `foundry kanban move <id> t` (moves back to todo) + add feedback\n\n")
-	sb.WriteString("**IMPORTANT**: Always move tasks after review. Tasks left in review are stuck.\n\n")
+	sb.WriteString("## MANDATORY: Execute Move Commands\n\n")
+	sb.WriteString("**CRITICAL**: For EVERY task in review, you MUST run `foundry task move` after reviewing.\n")
+	sb.WriteString("DO NOT just write 'APPROVED' or 'REJECTED' in your output - you must EXECUTE the command.\n\n")
+
+	sb.WriteString("## Your Workflow\n\n")
+	sb.WriteString("For EACH task in the review queue:\n\n")
+	sb.WriteString("1. **View task details**: `foundry task show <full-task-id>`\n")
+	sb.WriteString("2. **Check branch commits**: `git log main..task/<suffix> --oneline`\n")
+	sb.WriteString("3. **Review changes**: `git diff main..task/<suffix>`\n")
+	sb.WriteString("4. **Make decision and EXECUTE move command**:\n")
+	sb.WriteString("   - If APPROVED: `foundry task move <full-task-id> m`\n")
+	sb.WriteString("   - If REJECTED: `foundry task move <full-task-id> t` (add feedback to task description first)\n\n")
+
+	sb.WriteString("**Example workflow for task blocks-forge-abc:**\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("foundry task show blocks-forge-abc\n")
+	sb.WriteString("git log main..task/abc --oneline\n")
+	sb.WriteString("git diff main..task/abc\n")
+	sb.WriteString("# After review, EXECUTE:\n")
+	sb.WriteString("foundry task move blocks-forge-abc m   # Move to merge if approved\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Continuous Operation (Ralph Loop)\n\n")
+	sb.WriteString("You run CONTINUOUSLY until all review items are processed:\n")
+	sb.WriteString("1. For each task above, review AND move it\n")
+	sb.WriteString("2. After processing all, check for more: `foundry task list --status review`\n")
+	sb.WriteString("3. If more items exist, continue reviewing AND moving them\n")
+	sb.WriteString("4. ONLY output the completion promise when review queue is EMPTY\n\n")
+	sb.WriteString("**VERIFICATION**: Before completing, run `foundry task list --status review` to confirm empty.\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
-	sb.WriteString(fmt.Sprintf("\nWhen finished reviewing all tasks, output: <promise>%s</promise>\n", leader.PromiseReviewer))
+	sb.WriteString(fmt.Sprintf("\nWhen review queue is EMPTY, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseReviewer))
+
+	return sb.String()
+}
+
+// buildReviewQueueSection builds just the dynamic review queue section for custom prompts.
+func buildReviewQueueSection(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Current Tasks in Review\n\n")
+	reviewCount := 0
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusReview {
+			for _, issue := range col.Issues {
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+				if issue.Description != "" {
+					sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
+				}
+				reviewCount++
+			}
+		}
+	}
+	if reviewCount == 0 {
+		sb.WriteString("(no tasks in review - you may output the completion promise)\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen review queue is EMPTY, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseReviewer))
 
 	return sb.String()
 }
@@ -1424,16 +2278,25 @@ func buildPlannerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("- Risk (tackle unknowns early)\n")
 	sb.WriteString("- Value (user impact)\n\n")
 
+	sb.WriteString("## Task Management Commands\n\n")
+	sb.WriteString("Use these commands to view and manage tasks:\n")
+	sb.WriteString("- `foundry task list` - View all tasks by status\n")
+	sb.WriteString("- `foundry task show <id>` - Full task details\n")
+	sb.WriteString("- `foundry task move <id> <status>` - Move tasks between columns\n")
+	sb.WriteString("- `foundry task add \"title\" -p high -d \"desc\"` - Create new tasks\n")
+	sb.WriteString("- `foundry task edit <id> -p critical` - Update priority\n\n")
+
 	sb.WriteString("## Your Tasks\n\n")
 	sb.WriteString("1. Load planning context: `search_nodes({ query: \"project roadmap goals\" })`\n")
-	sb.WriteString("2. Review backlog tasks and assess priorities\n")
-	sb.WriteString("3. Move prioritized items to todo: `foundry kanban move <id> todo`\n")
-	sb.WriteString("4. Add missing tasks: `foundry kanban add \"title\" -p high -s todo -d \"description\"`\n")
-	sb.WriteString("5. Update priorities if needed: `foundry kanban edit <id> -p critical`\n\n")
+	sb.WriteString("2. Review backlog tasks: `foundry task list --status backlog`\n")
+	sb.WriteString("3. Inspect tasks: `foundry task show <id>` for full details\n")
+	sb.WriteString("4. Move prioritized items to todo: `foundry task move <id> todo`\n")
+	sb.WriteString("5. Add missing tasks: `foundry task add \"title\" -p high -s todo -d \"description\"`\n")
+	sb.WriteString("6. Update priorities if needed: `foundry task edit <id> -p critical`\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
-	sb.WriteString(fmt.Sprintf("\nWhen finished planning, output: <promise>%s</promise>\n", leader.PromisePlanner))
+	sb.WriteString(fmt.Sprintf("\nWhen finished planning, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromisePlanner))
 
 	return sb.String()
 }
@@ -1457,10 +2320,12 @@ func buildMergePrompt(board *kanban.Board, workDir string) string {
 		sb.WriteString("(no tasks in merge queue)\n")
 	}
 
-	sb.WriteString("\n## Task Branches\n\n")
-	sb.WriteString("Each task was developed in its own branch (pattern: `task/<task-id>`).\n")
-	sb.WriteString("- List all task branches: `git branch | grep task/`\n")
-	sb.WriteString("- View branch changes: `git log main..task/<id> --oneline`\n\n")
+	sb.WriteString("\n## Viewing Task Details\n\n")
+	sb.WriteString("Use these commands to inspect tasks and branches:\n")
+	sb.WriteString("- `foundry task show <id>` - Full task details with branch info\n")
+	sb.WriteString("- `foundry task diff <id>` - See code changes for a task\n")
+	sb.WriteString("- `foundry task log <id>` - Git commit history for a task\n")
+	sb.WriteString("- `foundry task branches` - List all task branches with status\n\n")
 
 	sb.WriteString("## Pre-Merge Checklist\n\n")
 	sb.WriteString("- [ ] All tests pass: `go test ./...`\n")
@@ -1474,16 +2339,16 @@ func buildMergePrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("   - Merge to main: `git checkout main && git merge task/<id> --no-ff -m \"Merge task/<id>: <title>\"`\n")
 	sb.WriteString("   - Resolve any conflicts\n")
 	sb.WriteString("   - Delete branch: `git branch -d task/<id>`\n")
-	sb.WriteString("   - **Move to done**: `foundry kanban move <id> d`\n")
+	sb.WriteString("   - **Move to done**: `foundry task move <id> d`\n")
 	sb.WriteString("4. Run final tests: `go test ./...`\n")
 	sb.WriteString("5. Push to remote: `git push origin main`\n\n")
 
-	sb.WriteString("**IMPORTANT**: After merging each task, move it to done with `foundry kanban move <id> d`\n\n")
+	sb.WriteString("**IMPORTANT**: After merging each task, move it to done with `foundry task move <id> d`\n\n")
 
 	sb.WriteString(leader.SequentialThinkingTriggers)
 	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
-	sb.WriteString(fmt.Sprintf("\nWhen finished, output: <promise>%s</promise>\n", leader.PromiseMerge))
+	sb.WriteString(fmt.Sprintf("\nWhen finished, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseMerge))
 
 	return sb.String()
 }
@@ -1491,31 +2356,153 @@ func buildMergePrompt(board *kanban.Board, workDir string) string {
 func buildDeployPrompt(board *kanban.Board, workDir string) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are a DEPLOYMENT COORDINATOR for the Forge supervisor. Code is merged and ready for verification.\n\n")
+	sb.WriteString("You are a DEPLOY LEADER for the Forge supervisor. Your job is to merge reviewed work to main and deploy.\n\n")
 
-	sb.WriteString("## Smoke Test Checklist\n\n")
-	sb.WriteString("- [ ] Application starts successfully\n")
-	sb.WriteString("- [ ] Core functionality works\n")
-	sb.WriteString("- [ ] No obvious errors in console/logs\n")
-	sb.WriteString("- [ ] Tests pass: `make test`\n\n")
+	// Collect and categorize tasks from merge queue
+	var cicdTasks, fixTasks, featureTasks []*kanban.Issue
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusMerge {
+			for _, issue := range col.Issues {
+				// Categorize by labels
+				isCICD := hasAnyLabel(issue, "ci", "cicd", "ci/cd", "pipeline", "build")
+				isFix := hasAnyLabel(issue, "bug", "fix", "hotfix", "bugfix", "patch")
+				if isCICD {
+					cicdTasks = append(cicdTasks, issue)
+				} else if isFix {
+					fixTasks = append(fixTasks, issue)
+				} else {
+					featureTasks = append(featureTasks, issue)
+				}
+			}
+		}
+	}
 
-	sb.WriteString("## Your Tasks\n\n")
-	sb.WriteString("1. Check handoffs: `search_memory_facts({ query: \"forge-handoff TO: deploy\" })`\n")
-	sb.WriteString("2. Verify build: `make build` or equivalent\n")
-	sb.WriteString("3. Run smoke tests:\n")
-	sb.WriteString("   - If web app: open in browser, check console for errors\n")
-	sb.WriteString("   - If CLI: run basic commands\n")
-	sb.WriteString("   - If library: run test suite\n")
-	sb.WriteString("4. Document what was built in a summary\n")
-	sb.WriteString("5. Tag the release if applicable: `git tag -a v<version> -m \"Release\"`\n\n")
+	totalTasks := len(cicdTasks) + len(fixTasks) + len(featureTasks)
+
+	sb.WriteString("## Priority Order for Merging\n\n")
+	sb.WriteString("Merge in this order to maintain stability:\n")
+	sb.WriteString("1. **CI/CD fixes** - restore build pipeline first\n")
+	sb.WriteString("2. **Bug fixes** - fix broken functionality\n")
+	sb.WriteString("3. **Features** - add new capabilities last\n\n")
+
+	sb.WriteString("## Tasks Ready to Merge\n\n")
+
+	if len(cicdTasks) > 0 {
+		sb.WriteString("### 🔧 CI/CD (merge first)\n")
+		for _, issue := range cicdTasks {
+			branchSuffix := extractBranchSuffix(issue.ID)
+			sb.WriteString(fmt.Sprintf("- `%s`: %s (branch: task/%s)\n", issue.ID[:8], issue.Title, branchSuffix))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(fixTasks) > 0 {
+		sb.WriteString("### 🐛 Fixes (merge second)\n")
+		for _, issue := range fixTasks {
+			branchSuffix := extractBranchSuffix(issue.ID)
+			sb.WriteString(fmt.Sprintf("- `%s`: %s (branch: task/%s)\n", issue.ID[:8], issue.Title, branchSuffix))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(featureTasks) > 0 {
+		sb.WriteString("### ✨ Features (merge last)\n")
+		for _, issue := range featureTasks {
+			branchSuffix := extractBranchSuffix(issue.ID)
+			sb.WriteString(fmt.Sprintf("- `%s`: %s (branch: task/%s)\n", issue.ID[:8], issue.Title, branchSuffix))
+		}
+		sb.WriteString("\n")
+	}
+
+	if totalTasks == 0 {
+		sb.WriteString("(no tasks in merge queue)\n\n")
+	}
+
+	sb.WriteString("## Viewing Task Details\n\n")
+	sb.WriteString("Use these commands to inspect tasks before merging:\n")
+	sb.WriteString("- `foundry task show <id>` - Full task details with branch info\n")
+	sb.WriteString("- `foundry task diff <id>` - See code changes for a task\n")
+	sb.WriteString("- `foundry task log <id>` - Git commit history for a task\n")
+	sb.WriteString("- `foundry task branches` - List all task branches with status\n")
+	sb.WriteString("- `foundry task list --status merge` - Tasks in merge queue\n\n")
+
+	sb.WriteString("## FIRST: Check CI Health\n\n")
+	sb.WriteString("Before merging any tasks, CHECK if CI is currently passing:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("gh run list --limit 5  # Check recent CI runs\n")
+	sb.WriteString("```\n\n")
+	sb.WriteString("**IF CI IS FAILING on main:**\n")
+	sb.WriteString("1. Identify the failure: `gh run view <run-id> --log-failed`\n")
+	sb.WriteString("2. FIX the CI issue FIRST before merging any new tasks\n")
+	sb.WriteString("3. Common fixes: missing dependencies in BUILD files, test failures\n")
+	sb.WriteString("4. After fixing, verify CI passes, then continue with merges\n\n")
+	sb.WriteString("**DO NOT merge new features if CI is broken** - fix CI first!\n\n")
+	sb.WriteString("## SECOND: Sync with Remote\n\n")
+	sb.WriteString("After CI is green, sync main with origin:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("git checkout main\n")
+	sb.WriteString("git fetch origin\n")
+	sb.WriteString("git merge origin/main  # or: git pull origin main\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Workflow\n\n")
+	sb.WriteString("For each task in priority order:\n")
+	sb.WriteString("1. **Check branch**: `git log main..task/<id> --oneline`\n")
+	sb.WriteString("2. **Run tests first**: `go test ./...` (or `make test`)\n")
+	sb.WriteString("3. **Merge to main**: `git checkout main && git merge task/<id> --no-ff -m \"Merge task/<id>: <title>\"`\n")
+	sb.WriteString("4. **Resolve conflicts** if any\n")
+	sb.WriteString("5. **Verify build**: `go build ./...` (or `make build`)\n")
+	sb.WriteString("6. **Push to remote**: `git push origin main` (REQUIRED after each merge)\n")
+	sb.WriteString("7. **Move to done**: `foundry task move <id> done`\n")
+	sb.WriteString("8. **Delete branch**: `git branch -d task/<id>`\n\n")
+
+	sb.WriteString("## After All Merges\n\n")
+	sb.WriteString("1. Verify all changes pushed: `git status` (should show 'up to date')\n")
+	sb.WriteString("2. Check CI status: `gh run list --limit 1`\n")
+	sb.WriteString("3. If CI fails, create a high-priority task to fix it\n\n")
+
+	sb.WriteString("## Continuous Operation (Ralph Loop)\n\n")
+	sb.WriteString("You run CONTINUOUSLY until all merge tasks are processed:\n")
+	sb.WriteString("1. Process tasks in priority order (CI/CD → fixes → features)\n")
+	sb.WriteString("2. After each merge, check for more: `foundry task list --status merge`\n")
+	sb.WriteString("3. If more items exist, continue merging them\n")
+	sb.WriteString("4. ONLY output the completion promise when merge queue is EMPTY\n\n")
 
 	sb.WriteString(leader.SequentialThinkingTriggers)
 	sb.WriteString(leader.ErrorHandlingGuidance)
 	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
-	sb.WriteString(fmt.Sprintf("\nWhen finished, output: <promise>%s</promise>\n", leader.PromiseDeploy))
+	sb.WriteString(fmt.Sprintf("\nWhen finished, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseDeploy))
 
 	return sb.String()
+}
+
+// hasAnyLabel checks if an issue has any of the specified labels (case-insensitive).
+func hasAnyLabel(issue *kanban.Issue, labels ...string) bool {
+	for _, issueLabel := range issue.Labels {
+		lower := strings.ToLower(issueLabel)
+		for _, target := range labels {
+			if lower == target || strings.Contains(lower, target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// extractBranchSuffix extracts the branch suffix from a task ID.
+// Task IDs are like "blocks-forge-0vk" and branches are "task/0vk".
+// Returns the part after the last hyphen.
+func extractBranchSuffix(taskID string) string {
+	lastHyphen := strings.LastIndex(taskID, "-")
+	if lastHyphen >= 0 && lastHyphen < len(taskID)-1 {
+		return taskID[lastHyphen+1:]
+	}
+	// Fallback: use first 8 chars if no hyphen
+	if len(taskID) >= 8 {
+		return taskID[:8]
+	}
+	return taskID
 }
 
 func buildTaskPrompt(task *kanban.Issue) string {
@@ -1540,7 +2527,7 @@ func buildTaskPrompt(task *kanban.Issue) string {
 	sb.WriteString("- When finished, just output your completion promise\n")
 	sb.WriteString("- The supervisor will move your task to 'review' automatically\n")
 	sb.WriteString("- The reviewer will validate your work and move it to 'done'\n")
-	sb.WriteString("- Do NOT run `foundry kanban move <id> done` - this breaks the workflow\n\n")
+	sb.WriteString("- Do NOT run `foundry task move <id> done` - this breaks the workflow\n\n")
 
 	// Add parallel workflow guidance
 	sb.WriteString("## Parallel Workflow\n\n")
@@ -1560,12 +2547,23 @@ func buildGroomerPrompt(board *kanban.Board, workDir string) string {
 
 	sb.WriteString("## Backlog Items\n\n")
 	backlogCount := 0
+	totalBacklog := 0
+	maxItems := 10 // Limit to prevent huge prompts
 	for _, col := range board.Columns {
 		if col.Status == kanban.StatusBacklog {
+			totalBacklog = len(col.Issues)
 			for _, issue := range col.Issues {
+				if backlogCount >= maxItems {
+					break
+				}
 				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
 				if issue.Description != "" {
-					sb.WriteString(fmt.Sprintf("  Description: %s\n", issue.Description))
+					// Truncate long descriptions
+					desc := issue.Description
+					if len(desc) > 200 {
+						desc = desc[:200] + "..."
+					}
+					sb.WriteString(fmt.Sprintf("  Description: %s\n", desc))
 				} else {
 					sb.WriteString("  Description: (none - NEEDS DETAIL)\n")
 				}
@@ -1575,6 +2573,8 @@ func buildGroomerPrompt(board *kanban.Board, workDir string) string {
 	}
 	if backlogCount == 0 {
 		sb.WriteString("(no items in backlog)\n")
+	} else if totalBacklog > maxItems {
+		sb.WriteString(fmt.Sprintf("\n(showing %d of %d total backlog items - prioritize these first)\n", maxItems, totalBacklog))
 	}
 
 	sb.WriteString("\n## Grooming Criteria\n\n")
@@ -1588,8 +2588,14 @@ func buildGroomerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("3. **Appropriate Priority**: Based on urgency and importance\n")
 	sb.WriteString("4. **Reasonable Scope**: Can be completed in one session (break up large items)\n\n")
 
+	sb.WriteString("## Viewing Backlog Items\n\n")
+	sb.WriteString("Use these commands to inspect tasks:\n")
+	sb.WriteString("- `foundry task show <id>` - Full task details and description\n")
+	sb.WriteString("- `foundry task list --status backlog` - All backlog items\n\n")
+
 	sb.WriteString("## Your Tasks\n\n")
 	sb.WriteString("1. **Research each backlog item**:\n")
+	sb.WriteString("   - View task details: `foundry task show <id>`\n")
 	sb.WriteString("   - Understand the codebase context: `Grep` and `Read` relevant files\n")
 	sb.WriteString("   - Check for existing patterns: How is similar functionality implemented?\n")
 	sb.WriteString("   - Identify dependencies: What other code/tasks does this depend on?\n")
@@ -1597,16 +2603,16 @@ func buildGroomerPrompt(board *kanban.Board, workDir string) string {
 
 	sb.WriteString("2. **Update item descriptions** with your research:\n")
 	sb.WriteString("   ```bash\n")
-	sb.WriteString("   foundry kanban edit <id> -d \"<detailed description>\"\n")
+	sb.WriteString("   foundry task edit <id> -d \"<detailed description>\"\n")
 	sb.WriteString("   ```\n\n")
 
 	sb.WriteString("3. **Break down large items** if needed:\n")
-	sb.WriteString("   - Create sub-tasks: `foundry kanban add \"<subtask>\" -p medium -s backlog -d \"<description>\"`\n")
+	sb.WriteString("   - Create sub-tasks: `foundry task add \"<subtask>\" -p medium -s backlog -d \"<description>\"`\n")
 	sb.WriteString("   - Reference parent: Include \"Part of: <parent-id>\" in description\n\n")
 
 	sb.WriteString("4. **Move ready items to todo**:\n")
 	sb.WriteString("   ```bash\n")
-	sb.WriteString("   foundry kanban move <id> todo\n")
+	sb.WriteString("   foundry task move <id> todo\n")
 	sb.WriteString("   ```\n\n")
 
 	sb.WriteString("5. **Prioritize strategically**:\n")
@@ -1614,17 +2620,121 @@ func buildGroomerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("   - `high`: Important for current goals\n")
 	sb.WriteString("   - `medium`: Should do soon\n")
 	sb.WriteString("   - `low`: Nice to have\n")
-	sb.WriteString("   - Update: `foundry kanban edit <id> -p <priority>`\n\n")
+	sb.WriteString("   - Update: `foundry task edit <id> -p <priority>`\n\n")
 
-	sb.WriteString("## Parallel Workflow\n\n")
+	sb.WriteString("## Continuous Operation (Ralph Loop)\n\n")
+	sb.WriteString("You run CONTINUOUSLY until all backlog items are processed:\n")
+	sb.WriteString("1. Process each backlog item shown above\n")
+	sb.WriteString("2. After processing, check for more: `foundry task list --status backlog`\n")
+	sb.WriteString("3. If more items exist, continue grooming them\n")
+	sb.WriteString("4. ONLY output the completion promise when backlog is EMPTY or all items are detailed\n\n")
+
 	sb.WriteString("You run in PARALLEL with workers - they may be implementing tasks while you groom.\n")
 	sb.WriteString("- Focus on items WITHOUT active workers\n")
-	sb.WriteString("- Don't move items that are already being worked on\n")
-	sb.WriteString("- Coordinate via Graphiti if needed\n\n")
+	sb.WriteString("- Don't move items that are already being worked on\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
 	sb.WriteString(leader.OutputFormat)
-	sb.WriteString(fmt.Sprintf("\nWhen finished grooming, output: <promise>%s</promise>\n", leader.PromiseGroomer))
+	sb.WriteString(fmt.Sprintf("\nWhen backlog is EMPTY or fully detailed, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseGroomer))
+
+	return sb.String()
+}
+
+// buildBoardStateSection builds the dynamic board state section for custom prompts.
+func buildBoardStateSection(board *kanban.Board, workDir, promise string) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Current Board State\n\n")
+	for _, col := range board.Columns {
+		sb.WriteString(fmt.Sprintf("### %s (%d)\n", col.Status, len(col.Issues)))
+		for _, issue := range col.Issues {
+			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen finished, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", promise))
+
+	return sb.String()
+}
+
+// buildMergeQueueSection builds the dynamic merge queue section for custom prompts.
+func buildMergeQueueSection(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Tasks Ready to Merge\n\n")
+	mergeCount := 0
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusMerge {
+			for _, issue := range col.Issues {
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+				mergeCount++
+			}
+		}
+	}
+	if mergeCount == 0 {
+		sb.WriteString("(no tasks ready to merge - you may output the completion promise)\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen merge queue is EMPTY, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseMerge))
+
+	return sb.String()
+}
+
+// buildDoneTasksSection builds the dynamic done tasks section for custom prompts.
+func buildDoneTasksSection(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Completed Tasks for Deployment\n\n")
+	doneCount := 0
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusDone {
+			for _, issue := range col.Issues {
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+				doneCount++
+			}
+		}
+	}
+	if doneCount == 0 {
+		sb.WriteString("(no tasks completed - waiting for merge)\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen deployment is complete, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseDeploy))
+
+	return sb.String()
+}
+
+// buildBacklogSection builds the dynamic backlog section for custom prompts.
+func buildBacklogSection(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("## Current Backlog Items\n\n")
+	backlogCount := 0
+	maxItems := 15
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusBacklog {
+			for _, issue := range col.Issues {
+				if backlogCount >= maxItems {
+					sb.WriteString(fmt.Sprintf("\n(showing %d of %d items - use `foundry task list --status backlog` to see all)\n", maxItems, len(col.Issues)))
+					break
+				}
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+				if issue.Description == "" {
+					sb.WriteString("  ⚠️ NEEDS DETAIL\n")
+				}
+				backlogCount++
+			}
+		}
+	}
+	if backlogCount == 0 {
+		sb.WriteString("(no items in backlog - you may output the completion promise)\n")
+	}
+
+	sb.WriteString(fmt.Sprintf("\nWorking directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen backlog is fully detailed, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseGroomer))
 
 	return sb.String()
 }
@@ -1663,13 +2773,13 @@ func buildTaskAnalyzerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("   - Look for incomplete features or missing tests\n\n")
 
 	sb.WriteString("4. **Requeue stuck tasks**:\n")
-	sb.WriteString("   - Move back to todo: `foundry kanban move <id> todo`\n")
-	sb.WriteString("   - Add note explaining why: `foundry kanban edit <id> -d \"Requeued: <reason>\"`\n\n")
+	sb.WriteString("   - Move back to todo: `foundry task move <id> todo`\n")
+	sb.WriteString("   - Add note explaining why: `foundry task edit <id> -d \"Requeued: <reason>\"`\n\n")
 
 	sb.WriteString("5. **Create new tasks if needed**:\n")
-	sb.WriteString("   - Follow-up work: `foundry kanban add \"title\" -d \"description\" -p medium -s todo`\n")
-	sb.WriteString("   - Bugs found: `foundry kanban add \"Fix: issue\" -p high -s todo`\n")
-	sb.WriteString("   - Refactoring: `foundry kanban add \"Refactor: area\" -p low -s backlog`\n\n")
+	sb.WriteString("   - Follow-up work: `foundry task add \"title\" -d \"description\" -p medium -s todo`\n")
+	sb.WriteString("   - Bugs found: `foundry task add \"Fix: issue\" -p high -s todo`\n")
+	sb.WriteString("   - Refactoring: `foundry task add \"Refactor: area\" -p low -s backlog`\n\n")
 
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
 
@@ -1688,7 +2798,448 @@ func buildTaskAnalyzerPrompt(board *kanban.Board, workDir string) string {
 	sb.WriteString("}\n")
 	sb.WriteString("```\n\n")
 
-	sb.WriteString(fmt.Sprintf("When finished, output: <promise>%s</promise>\n", leader.PromiseAnalyzer))
+	sb.WriteString(fmt.Sprintf("When finished, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseAnalyzer))
+
+	return sb.String()
+}
+
+func buildMonitorPrompt(workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are an INFRASTRUCTURE MONITOR for the Forge supervisor.\n")
+	sb.WriteString("Your job is to observe and report on infrastructure health.\n\n")
+
+	sb.WriteString("## What to Monitor\n\n")
+
+	sb.WriteString("### 1. K0s Cluster Health\n")
+	sb.WriteString("- Node status and readiness\n")
+	sb.WriteString("- Pod health across namespaces\n")
+	sb.WriteString("- Resource utilization (CPU, memory, disk)\n")
+	sb.WriteString("- Cluster events and warnings\n\n")
+
+	sb.WriteString("### 2. Prometheus Metrics\n")
+	sb.WriteString("- Active alerts and their severity\n")
+	sb.WriteString("- Key metrics trending (error rates, latency)\n")
+	sb.WriteString("- Scrape target health\n")
+	sb.WriteString("- Alert rule evaluation\n\n")
+
+	sb.WriteString("### 3. Loki Logs\n")
+	sb.WriteString("- Error patterns across services\n")
+	sb.WriteString("- Warning frequency and trends\n")
+	sb.WriteString("- Log volume anomalies\n")
+	sb.WriteString("- Critical service logs\n\n")
+
+	sb.WriteString("### 4. Distributed Tracing\n")
+	sb.WriteString("- Trace error rates\n")
+	sb.WriteString("- Latency percentiles (p50, p95, p99)\n")
+	sb.WriteString("- Service dependency health\n")
+	sb.WriteString("- Slow endpoints\n\n")
+
+	sb.WriteString("### 5. Flux GitOps Status\n")
+	sb.WriteString("- Kustomization reconciliation status\n")
+	sb.WriteString("- HelmRelease health\n")
+	sb.WriteString("- GitRepository sync status\n")
+	sb.WriteString("- Image update automation status\n\n")
+
+	sb.WriteString("### 6. Service Health\n")
+	sb.WriteString("- Deployment readiness\n")
+	sb.WriteString("- Service endpoint availability\n")
+	sb.WriteString("- Ingress/route status\n")
+	sb.WriteString("- Certificate expiration\n\n")
+
+	sb.WriteString("## Loading Context from Memory\n\n")
+	sb.WriteString("At the start of your session, load relevant context from Graphiti:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("# Search for infrastructure context\n")
+	sb.WriteString("search_nodes({ query: \"infrastructure k0s prometheus\" })\n\n")
+	sb.WriteString("# Search for recent alerts or issues\n")
+	sb.WriteString("search_memory_facts({ query: \"alert error infrastructure\" })\n\n")
+	sb.WriteString("# Search for monitoring configuration\n")
+	sb.WriteString("search_memory_facts({ query: \"monitor config threshold\" })\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Monitoring Commands\n\n")
+	sb.WriteString("Use kubectl and CLI tools to gather data:\n\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("# K0s cluster status\n")
+	sb.WriteString("kubectl get nodes -o wide\n")
+	sb.WriteString("kubectl get pods -A --field-selector=status.phase!=Running\n\n")
+	sb.WriteString("# Prometheus alerts\n")
+	sb.WriteString("kubectl exec -n monitoring prometheus-0 -- wget -qO- http://localhost:9090/api/v1/alerts | jq '.data.alerts[] | select(.state==\"firing\")'\n\n")
+	sb.WriteString("# Flux status\n")
+	sb.WriteString("flux get all -A\n\n")
+	sb.WriteString("# Service health\n")
+	sb.WriteString("kubectl get deployments -A\n")
+	sb.WriteString("kubectl get ingress -A\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Reporting Format\n\n")
+	sb.WriteString("When you find issues, report them clearly:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("### Health Report\n\n")
+	sb.WriteString("**Cluster Status**: [healthy/degraded/critical]\n")
+	sb.WriteString("**Active Alerts**: [count]\n")
+	sb.WriteString("**Services Down**: [list]\n\n")
+	sb.WriteString("#### Issues Found\n")
+	sb.WriteString("1. [Issue description]\n")
+	sb.WriteString("   - Severity: [critical/warning/info]\n")
+	sb.WriteString("   - Component: [affected component]\n")
+	sb.WriteString("   - Recommendation: [suggested action]\n\n")
+	sb.WriteString("#### Metrics Summary\n")
+	sb.WriteString("- Error rate: [value]\n")
+	sb.WriteString("- P95 latency: [value]\n")
+	sb.WriteString("- Pod restarts (24h): [count]\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Writing Health Status File\n\n")
+	sb.WriteString("**IMPORTANT**: After each monitoring cycle, write the health status to a JSON file.\n")
+	sb.WriteString("This allows other tools to read the current system health.\n\n")
+	sb.WriteString("Write to: `.forge/health/status.json` in the workspace root.\n\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("# Create health directory if needed\n")
+	sb.WriteString("mkdir -p .forge/health\n\n")
+	sb.WriteString("# Write status file (use cat with heredoc for JSON)\n")
+	sb.WriteString("cat > .forge/health/status.json << 'EOF'\n")
+	sb.WriteString("{\n")
+	sb.WriteString("  \"timestamp\": \"2024-02-05T12:00:00Z\",\n")
+	sb.WriteString("  \"status\": \"healthy|degraded|critical\",\n")
+	sb.WriteString("  \"cluster\": {\n")
+	sb.WriteString("    \"nodes_ready\": 3,\n")
+	sb.WriteString("    \"nodes_total\": 3,\n")
+	sb.WriteString("    \"pods_running\": 45,\n")
+	sb.WriteString("    \"pods_failed\": 0\n")
+	sb.WriteString("  },\n")
+	sb.WriteString("  \"alerts\": {\n")
+	sb.WriteString("    \"critical\": 0,\n")
+	sb.WriteString("    \"warning\": 2,\n")
+	sb.WriteString("    \"info\": 5\n")
+	sb.WriteString("  },\n")
+	sb.WriteString("  \"issues\": [\n")
+	sb.WriteString("    {\n")
+	sb.WriteString("      \"severity\": \"warning\",\n")
+	sb.WriteString("      \"component\": \"prometheus\",\n")
+	sb.WriteString("      \"message\": \"High memory usage on prometheus-0\",\n")
+	sb.WriteString("      \"recommendation\": \"Consider increasing memory limits\"\n")
+	sb.WriteString("    }\n")
+	sb.WriteString("  ],\n")
+	sb.WriteString("  \"services\": {\n")
+	sb.WriteString("    \"healthy\": [\"api\", \"web\", \"worker\"],\n")
+	sb.WriteString("    \"degraded\": [],\n")
+	sb.WriteString("    \"down\": []\n")
+	sb.WriteString("  },\n")
+	sb.WriteString("  \"metrics\": {\n")
+	sb.WriteString("    \"error_rate_percent\": 0.1,\n")
+	sb.WriteString("    \"p95_latency_ms\": 250,\n")
+	sb.WriteString("    \"pod_restarts_24h\": 3\n")
+	sb.WriteString("  }\n")
+	sb.WriteString("}\n")
+	sb.WriteString("EOF\n")
+	sb.WriteString("```\n\n")
+	sb.WriteString("Update this file after EACH monitoring check with current values.\n")
+	sb.WriteString("The file is read by `foundry health status` command.\n\n")
+
+	sb.WriteString("## Saving to Memory\n\n")
+	sb.WriteString("Also save important findings to Graphiti for historical context:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("add_memory({\n")
+	sb.WriteString("  group_id: \"forge-monitor\",\n")
+	sb.WriteString("  content: `\n")
+	sb.WriteString("    TIMESTAMP: [current time]\n")
+	sb.WriteString("    CLUSTER_STATUS: [overall health]\n")
+	sb.WriteString("    ALERTS: [active alert summary]\n")
+	sb.WriteString("    ISSUES: [issues found]\n")
+	sb.WriteString("    RECOMMENDATIONS: [suggested actions]\n")
+	sb.WriteString("  `\n")
+	sb.WriteString("})\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Continuous Operation\n\n")
+	sb.WriteString("You run continuously until:\n")
+	sb.WriteString("1. All systems are healthy (no active alerts)\n")
+	sb.WriteString("2. All issues have been documented\n")
+	sb.WriteString("3. Recommendations have been recorded\n\n")
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen monitoring is complete and all systems are healthy, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseMonitor))
+
+	return sb.String()
+}
+
+func buildTesterPrompt(workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are a UI/API TESTER for the Forge supervisor.\n")
+	sb.WriteString("Your job is to validate UI changes and test APIs using browser automation.\n\n")
+
+	sb.WriteString("## Available Tools\n\n")
+	sb.WriteString("You have access to the Chrome extension MCP tools for browser automation:\n")
+	sb.WriteString("- `mcp__claude-in-chrome__navigate` - Navigate to URLs\n")
+	sb.WriteString("- `mcp__claude-in-chrome__read_page` - Read page content\n")
+	sb.WriteString("- `mcp__claude-in-chrome__take_screenshot` - Capture screenshots\n")
+	sb.WriteString("- `mcp__claude-in-chrome__form_input` - Fill form fields\n")
+	sb.WriteString("- `mcp__claude-in-chrome__computer` - Click, scroll, interact\n")
+	sb.WriteString("- `mcp__claude-in-chrome__javascript_tool` - Execute JavaScript\n\n")
+
+	sb.WriteString("## What to Test\n\n")
+
+	sb.WriteString("### 1. UI Validation\n")
+	sb.WriteString("- Page loads correctly\n")
+	sb.WriteString("- UI components render properly\n")
+	sb.WriteString("- Forms work as expected\n")
+	sb.WriteString("- Error states display correctly\n")
+	sb.WriteString("- Responsive design works\n\n")
+
+	sb.WriteString("### 2. API Testing\n")
+	sb.WriteString("- Endpoints return expected responses\n")
+	sb.WriteString("- Error handling works correctly\n")
+	sb.WriteString("- Authentication flows work\n")
+	sb.WriteString("- Data validation is enforced\n\n")
+
+	sb.WriteString("### 3. Integration Testing\n")
+	sb.WriteString("- UI correctly displays API data\n")
+	sb.WriteString("- Form submissions work end-to-end\n")
+	sb.WriteString("- Navigation flows work correctly\n\n")
+
+	sb.WriteString("## Creating Tasks for Issues\n\n")
+	sb.WriteString("When you find issues, CREATE A BACKLOG TASK:\n\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("# For UI bugs\n")
+	sb.WriteString("foundry task add \"Fix: <UI issue>\" -p high -s backlog -d \"<detailed description with steps to reproduce>\"\n\n")
+	sb.WriteString("# For API issues\n")
+	sb.WriteString("foundry task add \"Fix: <API issue>\" -p high -s backlog -d \"<endpoint, expected vs actual>\"\n\n")
+	sb.WriteString("# For performance issues\n")
+	sb.WriteString("foundry task add \"Optimize: <performance issue>\" -p medium -s backlog -d \"<what's slow and where>\"\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Test Report Format\n\n")
+	sb.WriteString("After each test cycle, report:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("## Test Report - [timestamp]\n\n")
+	sb.WriteString("**Tests Run**: [count]\n")
+	sb.WriteString("**Passed**: [count]\n")
+	sb.WriteString("**Failed**: [count]\n\n")
+	sb.WriteString("### Failed Tests\n")
+	sb.WriteString("1. [Test name]: [failure reason]\n")
+	sb.WriteString("   - Steps to reproduce: [...]\n")
+	sb.WriteString("   - Expected: [...]\n")
+	sb.WriteString("   - Actual: [...]\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Saving to Memory\n\n")
+	sb.WriteString("Save test results to Graphiti:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("add_memory({\n")
+	sb.WriteString("  group_id: \"forge-tester\",\n")
+	sb.WriteString("  content: `\n")
+	sb.WriteString("    TIMESTAMP: [current time]\n")
+	sb.WriteString("    TESTS_RUN: [count]\n")
+	sb.WriteString("    PASSED: [count]\n")
+	sb.WriteString("    FAILED: [count]\n")
+	sb.WriteString("    ISSUES_CREATED: [task IDs]\n")
+	sb.WriteString("    COVERAGE: [areas tested]\n")
+	sb.WriteString("  `\n")
+	sb.WriteString("})\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen testing is complete, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseTester))
+
+	return sb.String()
+}
+
+func buildPMPrompt(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are a PROJECT MANAGER for the Forge supervisor.\n")
+	sb.WriteString("Your job is to identify the next best high-value tasks based on completed work.\n\n")
+
+	sb.WriteString("## Your Mission\n\n")
+	sb.WriteString("Analyze our completed work and the current state of the project to identify:\n")
+	sb.WriteString("1. **5 best next tasks** - ordered by impact and confidence\n")
+	sb.WriteString("2. Only include items with **80%+ confidence** that they're the right next step\n")
+	sb.WriteString("3. Focus on **customer value** - what would users want most?\n\n")
+
+	sb.WriteString("## Focus Areas\n\n")
+	sb.WriteString("When identifying tasks, prioritize:\n\n")
+	sb.WriteString("### 1. New Features (user-facing value)\n")
+	sb.WriteString("- What features would delight users?\n")
+	sb.WriteString("- What gaps exist in our current offering?\n")
+	sb.WriteString("- What would differentiate us from alternatives?\n\n")
+
+	sb.WriteString("### 2. Reliability & Stability\n")
+	sb.WriteString("- What areas are prone to errors or failures?\n")
+	sb.WriteString("- What needs better error handling or recovery?\n")
+	sb.WriteString("- What lacks proper testing or validation?\n\n")
+
+	sb.WriteString("### 3. User Experience\n")
+	sb.WriteString("- What frustrations do users face?\n")
+	sb.WriteString("- What workflows are awkward or slow?\n")
+	sb.WriteString("- What documentation or help is missing?\n\n")
+
+	sb.WriteString("### 4. Technical Debt\n")
+	sb.WriteString("- What code is hard to maintain?\n")
+	sb.WriteString("- What would speed up future development?\n")
+	sb.WriteString("- What patterns need standardization?\n\n")
+
+	// Show completed tasks
+	sb.WriteString(buildDoneTasksSection(board, workDir))
+
+	// Show current backlog for context
+	sb.WriteString("\n## Current Backlog\n\n")
+	backlogCount := 0
+	for _, col := range board.Columns {
+		if col.Status == kanban.StatusBacklog {
+			for _, issue := range col.Issues {
+				sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID[:8], issue.Title))
+				backlogCount++
+			}
+		}
+	}
+	if backlogCount == 0 {
+		sb.WriteString("(no items in backlog)\n")
+	}
+
+	sb.WriteString("\n## Task Creation\n\n")
+	sb.WriteString("For each recommended task, create it in the backlog:\n\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("foundry task add \"<title>\" -p <priority> -s backlog -d \"<description>\"\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("Priority levels:\n")
+	sb.WriteString("- `critical` - Urgent, blocking issues\n")
+	sb.WriteString("- `high` - Important for next release\n")
+	sb.WriteString("- `medium` - Should do soon\n")
+	sb.WriteString("- `low` - Nice to have\n\n")
+
+	sb.WriteString("## Output Format\n\n")
+	sb.WriteString("Present your analysis as:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("## PM Analysis - [timestamp]\n\n")
+	sb.WriteString("### Completed Work Summary\n")
+	sb.WriteString("[Brief summary of what was accomplished]\n\n")
+	sb.WriteString("### Top 5 Recommended Tasks\n")
+	sb.WriteString("1. **[Task Title]** (Confidence: X%)\n")
+	sb.WriteString("   - Category: [Feature/Reliability/UX/TechDebt]\n")
+	sb.WriteString("   - Rationale: [Why this is important]\n")
+	sb.WriteString("   - Expected Impact: [What users/devs gain]\n\n")
+	sb.WriteString("[...repeat for 2-5]\n\n")
+	sb.WriteString("### Tasks Created\n")
+	sb.WriteString("- [task-id]: [title]\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Saving to Memory\n\n")
+	sb.WriteString("Save your analysis to Graphiti:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("add_memory({\n")
+	sb.WriteString("  group_id: \"forge-pm\",\n")
+	sb.WriteString("  content: `\n")
+	sb.WriteString("    TIMESTAMP: [current time]\n")
+	sb.WriteString("    CYCLE: [cycle number]\n")
+	sb.WriteString("    COMPLETED_REVIEWED: [count]\n")
+	sb.WriteString("    TASKS_CREATED: [task IDs]\n")
+	sb.WriteString("    TOP_PRIORITY: [most important task]\n")
+	sb.WriteString("    THEMES: [patterns observed]\n")
+	sb.WriteString("  `\n")
+	sb.WriteString("})\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen you've identified and created your recommended tasks, output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromisePM))
+
+	return sb.String()
+}
+
+func buildCICDPrompt(workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("You are a CI/CD LEADER for the Forge supervisor.\n")
+	sb.WriteString("Your job is to monitor CI/CD health, fix broken builds, and ensure deployments are reliable.\n\n")
+
+	sb.WriteString("## Your Mission\n\n")
+	sb.WriteString("1. Check if CI is currently healthy\n")
+	sb.WriteString("2. If broken, diagnose and fix the issue\n")
+	sb.WriteString("3. Create tasks for any issues you can't fix immediately\n")
+	sb.WriteString("4. Report on CI/CD status and recommend improvements\n\n")
+
+	sb.WriteString("## FIRST: Check CI Health\n\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("# Check recent CI runs\n")
+	sb.WriteString("gh run list --limit 10\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## If CI is FAILING\n\n")
+	sb.WriteString("1. **Get failure details**:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("gh run view <run-id> --log-failed\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("2. **Common failures and fixes**:\n\n")
+	sb.WriteString("| Error Pattern | Cause | Fix |\n")
+	sb.WriteString("|--------------|-------|-----|\n")
+	sb.WriteString("| `missing strict dependencies` | BUILD file missing dep | Add to deps in BUILD.bazel |\n")
+	sb.WriteString("| `undefined: X` | Missing source file | Add to srcs in BUILD |\n")
+	sb.WriteString("| `test failed` | Broken test | Fix test or code |\n")
+	sb.WriteString("| `timeout` | Slow build | Optimize or add caching |\n\n")
+
+	sb.WriteString("3. **Fix the issue directly** if possible:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("# Edit the file\n")
+	sb.WriteString("# Then commit and push\n")
+	sb.WriteString("git add <files>\n")
+	sb.WriteString("git commit -m \"fix(bazel): <description>\"\n")
+	sb.WriteString("git push origin main\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("4. **Verify the fix**:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("gh run list --limit 1  # Check if new run started\n")
+	sb.WriteString("gh run watch <run-id>  # Wait for completion\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## If you cannot fix immediately\n\n")
+	sb.WriteString("Create a task for the issue:\n")
+	sb.WriteString("```bash\n")
+	sb.WriteString("foundry task add \"Fix: <specific error>\" -p critical -s todo -l bug,cicd\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## CI/CD Status Report\n\n")
+	sb.WriteString("After checking CI, provide a status report:\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString("## CI/CD Health Report\n\n")
+	sb.WriteString("| Metric | Status |\n")
+	sb.WriteString("|--------|--------|\n")
+	sb.WriteString("| **Overall Health** | 🟢 HEALTHY / 🟡 DEGRADED / 🔴 BROKEN |\n")
+	sb.WriteString("| **Last Success** | <timestamp> |\n")
+	sb.WriteString("| **Recent Failures** | <count> |\n")
+	sb.WriteString("| **Pending Fixes** | <count> |\n\n")
+	sb.WriteString("### Recent Runs\n")
+	sb.WriteString("- ✅/❌ <commit-msg> - <timestamp>\n\n")
+	sb.WriteString("### Recommendations\n")
+	sb.WriteString("- <improvement suggestion>\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString("## Saving to Memory\n\n")
+	sb.WriteString("Save CI status to Graphiti:\n")
+	sb.WriteString("```\n")
+	sb.WriteString("add_memory({\n")
+	sb.WriteString("  group_id: \"forge-cicd\",\n")
+	sb.WriteString("  content: `\n")
+	sb.WriteString("    TIMESTAMP: [current time]\n")
+	sb.WriteString("    CI_STATUS: [healthy/degraded/broken]\n")
+	sb.WriteString("    LAST_SUCCESS: [commit hash]\n")
+	sb.WriteString("    FAILURES_FIXED: [count]\n")
+	sb.WriteString("    PATTERNS: [common failure patterns]\n")
+	sb.WriteString("    RECOMMENDATIONS: [improvements]\n")
+	sb.WriteString("  `\n")
+	sb.WriteString("})\n")
+	sb.WriteString("```\n\n")
+
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", workDir))
+	sb.WriteString(leader.OutputFormat)
+	sb.WriteString(fmt.Sprintf("\nWhen CI is healthy (all recent builds passing), output EXACTLY this text (including the XML tags):\n```\n<promise>%s</promise>\n```\n", leader.PromiseCICD))
 
 	return sb.String()
 }
@@ -1767,6 +3318,12 @@ func printSummary(store *kanban.Store, reg *worker.Registry, state *supervisorSt
 	}
 	if state.analyzer.running {
 		activeLeaders = append(activeLeaders, "🔬analyzer")
+	}
+	if state.monitor.running {
+		activeLeaders = append(activeLeaders, "📡monitor")
+	}
+	if state.tester.running {
+		activeLeaders = append(activeLeaders, "🧪tester")
 	}
 	if state.groomer.running {
 		activeLeaders = append(activeLeaders, "🧹groomer")

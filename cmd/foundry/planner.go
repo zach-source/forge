@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/leader"
-	"github.com/zach-source/forge/internal/notion"
 )
 
 func newPlannerCmd() *cobra.Command {
@@ -21,13 +20,12 @@ func newPlannerCmd() *cobra.Command {
 
 The Planner is responsible for:
 - Breaking down goals into epics, features, and tasks
-- Creating and managing Notion issues
+- Creating and managing tasks (via foundry task add)
 - Maintaining project roadmap and priorities
-- Syncing planning artifacts with beads
 
 Examples:
-  forge planner                    # Start planning session
-  forge planner --id my-session    # Use custom session ID`,
+  foundry planner                    # Start planning session
+  foundry planner --id my-session    # Use custom session ID`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := leader.GetWorkDir()
 			if err != nil {
@@ -39,12 +37,7 @@ Examples:
 			cfg.SkipPerms = !noSkip
 			cfg.SessionID = sessionID
 
-			notionCfg, err := notion.Load()
-			if err != nil {
-				return err
-			}
-
-			prompt := leader.PlannerPrompt(notionCfg.DatabaseID, workDir)
+			prompt := leader.PlannerPrompt("beads", workDir)
 			return leader.Run(context.Background(), cfg, prompt, leader.PlannerPromise())
 		},
 	}

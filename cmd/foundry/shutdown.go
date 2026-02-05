@@ -95,14 +95,13 @@ func runShutdown(force bool) error {
 		fmt.Println("   (no active forge sessions)")
 	}
 
-	// 3. Kill orphaned tmux sessions
+	// 3. Kill orphaned tmux sessions (in forge tmux server)
 	fmt.Println()
 	fmt.Println("🧹 Cleaning up tmux sessions...")
-	tmuxList, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	allSessions, err := tmux.ListSessions("")
 	if err == nil {
-		sessions := strings.Split(strings.TrimSpace(string(tmuxList)), "\n")
 		prefixes := []string{"forge-", "foundry-", "worker-", "you-are-", "github-sync"}
-		for _, session := range sessions {
+		for _, session := range allSessions {
 			session = strings.TrimSpace(session)
 			if session == "" {
 				continue
@@ -111,11 +110,7 @@ func runShutdown(force bool) error {
 				if strings.HasPrefix(session, prefix) {
 					s := tmux.NewSession(session, "", "")
 					if s.Exists() {
-						if force {
-							exec.Command("tmux", "kill-session", "-t", session).Run()
-						} else {
-							s.Kill()
-						}
+						s.Kill()
 						fmt.Printf("   ✅ Killed tmux: %s\n", session)
 						stopped++
 					}

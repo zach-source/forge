@@ -122,7 +122,7 @@ When complete, output <promise>FEATURE_COMPLETE</promise>`, featureName, wt.Path
 				cfg.CompletionPromise = "FEATURE_COMPLETE"
 				cfg.MaxIterations = 100
 				cfg.WorkDir = wt.Path
-				cfg.MCPServers = []string{"graphiti", "context7"}
+				cfg.MCPServers = []string{} // Empty - MCP servers cause hangs if not available
 				cfg.SkipPermissions = !noSkip
 				cfg.SessionID = sessionID
 
@@ -259,7 +259,7 @@ When complete, output <promise>FEATURE_COMPLETE</promise>`, featureName, repoCon
 			cfg.CompletionPromise = "FEATURE_COMPLETE"
 			cfg.MaxIterations = 100
 			cfg.WorkDir = wt.Path
-			cfg.MCPServers = []string{"graphiti", "context7"}
+			cfg.MCPServers = []string{} // Empty - MCP servers cause hangs if not available
 			cfg.SkipPermissions = !noSkip
 			cfg.SessionID = sessionID
 

@@ -28,7 +28,7 @@ type legacyIssue struct {
 	UpdatedAt   time.Time
 }
 
-func newKanbanMigrateCmd() *cobra.Command {
+func newTaskMigrateCmd() *cobra.Command {
 	var (
 		dryRun     bool
 		dbPath     string

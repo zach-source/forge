@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/zach-source/forge/internal/leader"
 	"github.com/zach-source/forge/internal/workspace"
 )
 
@@ -103,6 +104,17 @@ Examples:
 				fmt.Printf("Warning: failed to create CLAUDE.md: %v\n", err)
 			}
 
+			// Initialize default leader prompts
+			promptLoader := leader.NewPromptLoader(absDir)
+			projectContext := fmt.Sprintf("This workspace is: %s", ws.Name)
+			if description != "" {
+				projectContext = description
+			}
+			initialized, err := promptLoader.InitDefaultsWithContext(projectContext, false)
+			if err != nil {
+				fmt.Printf("Warning: failed to initialize prompts: %v\n", err)
+			}
+
 			fmt.Printf("✅ Initialized forge workspace: %s\n", ws.Name)
 			fmt.Printf("   Location: %s\n", absDir)
 			fmt.Println()
@@ -112,6 +124,9 @@ Examples:
 			fmt.Println("   .forge/repos/          - Repository directory")
 			fmt.Println("   .forge/sessions/       - Session state")
 			fmt.Println("   .forge/logs/           - Log files")
+			if len(initialized) > 0 {
+				fmt.Printf("   .forge/prompts/        - Leader prompts (%d files)\n", len(initialized))
+			}
 			fmt.Println()
 			fmt.Println("Next steps:")
 			fmt.Println("  1. Add repositories:")

@@ -17,7 +17,7 @@ func main() {
 		Long: `Foundry orchestrates development workflows on top of forge.
 
 It provides tools for:
-- Local kanban issue tracking (view on beads)
+- Task management with git integration (beads backend)
 - Parallel workers with persistent identity
 - External board sync (Notion, GitHub Projects)
 - Workspace and repository management
@@ -27,7 +27,8 @@ It provides tools for:
 Foundry uses forge for running Claude sessions.
 
 Examples:
-  foundry kanban                 # View local kanban board
+  foundry task                   # View all tasks by status
+  foundry task add "Fix bug"     # Create new task
   foundry worker create          # Create a new worker
   foundry board --sync           # Sync with Notion
   foundry init                   # Initialize workspace
@@ -38,8 +39,10 @@ Examples:
 	// Add subcommands
 	rootCmd.AddCommand(
 		// Local tools
-		newKanbanCmd(),
+		newTaskCmd(),
 		newLogsCmd(),
+		newHealthCmd(),
+		newSummaryCmd(),
 		// Orchestration
 		newWorkerCmd(),
 		newBoardCmd(),
@@ -51,10 +54,13 @@ Examples:
 		newReviewerCmd(),
 		newMergeCmd(),
 		newDeployCmd(),
+		newCICDCmd(),
+		newObserveCmd(),
 		// Workspace management
 		newInitCmd(),
 		newRepoCmd(),
 		newWorkCmd(),
+		newPromptsCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

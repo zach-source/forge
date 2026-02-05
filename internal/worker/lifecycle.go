@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"time"
 
 	"github.com/zach-source/forge/internal/agent"
@@ -14,11 +13,12 @@ import (
 
 // StartOptions configures worker startup.
 type StartOptions struct {
-	TaskID    string
-	Worktree  string
-	Prompt    string
-	Promise   string
-	MCPConfig string
+	TaskID        string
+	Worktree      string
+	Prompt        string
+	Promise       string
+	MCPConfig     string
+	MaxIterations int // 0 = use default (100), -1 = unlimited
 }
 
 // Start starts a worker with the given options.
@@ -71,9 +71,17 @@ func Start(ctx context.Context, reg *Registry, workerID string, opts StartOption
 	cfg := agent.DefaultConfig()
 	cfg.Prompt = fullPrompt
 	cfg.CompletionPromise = promise
-	cfg.MaxIterations = 100
 	cfg.SessionID = sessionID
 	cfg.SkipPermissions = true
+
+	// Set max iterations (0 = default 100, -1 = unlimited)
+	if opts.MaxIterations < 0 {
+		cfg.MaxIterations = 0 // 0 means unlimited in agent config
+	} else if opts.MaxIterations > 0 {
+		cfg.MaxIterations = opts.MaxIterations
+	} else {
+		cfg.MaxIterations = 100 // default
+	}
 
 	if opts.Worktree != "" {
 		cfg.WorkDir = opts.Worktree
@@ -263,18 +271,20 @@ func Reassign(reg *Registry, fromID, toID string) error {
 }
 
 // WorkerMCPServers returns the MCP servers needed for a worker role.
+// NOTE: MCP servers that are not running will cause Claude to hang, so
+// only include servers that are known to be available.
 func WorkerMCPServers(role Role) []string {
-	base := []string{"graphiti", "context7"}
+	// Empty base - MCP servers should be explicitly configured per-role
+	// when they are known to be available
+	var servers []string
 
 	switch role {
 	case RolePlanner:
-		return append(base, "notion", "sequential-thinking")
-	case RoleReviewer:
-		return append(base, "notion")
+		return append(servers, "sequential-thinking")
 	case RoleMerge, RoleDeploy:
-		return append(base, "notion", "sequential-thinking")
+		return append(servers, "sequential-thinking")
 	default:
-		return base
+		return servers
 	}
 }
 
@@ -298,14 +308,12 @@ func UpperName(name string) string {
 
 // suspendTmuxSession sends Ctrl+Z to suspend the foreground process.
 func suspendTmuxSession(sessionName string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", sessionName, "C-z")
-	return cmd.Run()
+	return tmux.SuspendSession(sessionName)
 }
 
 // resumeTmuxSession sends 'fg' to resume the foreground process.
 func resumeTmuxSession(sessionName string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", sessionName, "fg", "Enter")
-	return cmd.Run()
+	return tmux.ResumeSession(sessionName)
 }
 
 // GetStatus returns the current status of a worker's tmux session.

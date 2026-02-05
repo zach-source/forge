@@ -9,7 +9,6 @@ import (
 	"os"
 
 	"github.com/zach-source/forge/internal/agent"
-	"github.com/zach-source/forge/internal/notion"
 )
 
 // Role defines the type of leader.
@@ -21,6 +20,10 @@ const (
 	RoleMerge      Role = "merge"
 	RoleDeployment Role = "deployment"
 	RoleGroomer    Role = "groomer"
+	RoleMonitor    Role = "monitor"
+	RoleTester     Role = "tester"
+	RolePM         Role = "pm"
+	RoleCICD       Role = "cicd"
 )
 
 // Config holds configuration for a leader session.
@@ -50,11 +53,12 @@ func DefaultConfig(role Role) Config {
 }
 
 // MCPServers returns the MCP servers needed for a leader role.
+// NOTE: Only include MCP servers that are known to be available.
+// Unavailable servers will cause Claude to hang.
 func MCPServers(role Role, extra []string) []string {
-	// All leaders need notion + graphiti + context7
-	base := []string{"notion", "graphiti", "context7"}
+	var base []string
 
-	// Role-specific additions
+	// Role-specific MCP servers
 	switch role {
 	case RoleMerge, RoleDeployment:
 		// These roles benefit from sequential thinking for complex decisions
@@ -69,16 +73,6 @@ func (c *Config) Validate() error {
 	if c.WorkDir == "" {
 		return fmt.Errorf("working directory is required")
 	}
-
-	// Check Notion is configured
-	if _, err := notion.Load(); err != nil {
-		return fmt.Errorf("notion not configured: %w (run 'forge board --config')", err)
-	}
-
-	if !notion.HasToken() {
-		return fmt.Errorf("NOTION_API_TOKEN not set")
-	}
-
 	return nil
 }
 
@@ -87,8 +81,6 @@ func Run(ctx context.Context, cfg Config, prompt, promise string) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-
-	notionCfg, _ := notion.Load()
 
 	// Build agent config
 	agentCfg := agent.DefaultConfig()
@@ -107,19 +99,22 @@ func Run(ctx context.Context, cfg Config, prompt, promise string) error {
 	}
 
 	// Print startup banner
-	printBanner(cfg.Role, notionCfg.DatabaseID)
+	printBanner(cfg.Role)
 
 	return a.Run(ctx)
 }
 
 // printBanner displays the startup message for a leader.
-func printBanner(role Role, databaseID string) {
+func printBanner(role Role) {
 	icons := map[Role]string{
 		RolePlanner:    "📋",
 		RoleReviewer:   "🔍",
 		RoleMerge:      "🔀",
 		RoleDeployment: "🚀",
 		RoleGroomer:    "🧹",
+		RoleMonitor:    "📡",
+		RoleTester:     "🧪",
+		RolePM:         "📊",
 	}
 
 	names := map[Role]string{
@@ -128,13 +123,16 @@ func printBanner(role Role, databaseID string) {
 		RoleMerge:      "Merge Leader",
 		RoleDeployment: "Deployment Leader",
 		RoleGroomer:    "Backlog Groomer",
+		RoleMonitor:    "Monitor",
+		RoleTester:     "Tester",
+		RolePM:         "Project Manager",
 	}
 
 	icon := icons[role]
 	name := names[role]
 
 	fmt.Printf("%s  Starting %s session...\n", icon, name)
-	fmt.Printf("   Notion Database: %s\n", databaseID)
+	fmt.Printf("   Issue tracker: beads (.beads/)\n")
 	fmt.Println()
 }
 

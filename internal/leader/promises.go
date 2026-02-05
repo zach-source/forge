@@ -19,6 +19,18 @@ const (
 
 	// Groomer promises
 	PromiseGroomer = "GROOMER_COMPLETE"
+
+	// Monitor promises
+	PromiseMonitor = "MONITOR_COMPLETE"
+
+	// Tester promises
+	PromiseTester = "TESTER_COMPLETE"
+
+	// PM (Project Manager) promises
+	PromisePM = "PM_COMPLETE"
+
+	// CI/CD Leader promises
+	PromiseCICD = "CICD_HEALTHY"
 )
 
 // WorkerPromiseFormat is the format string for worker promises.
@@ -50,7 +62,9 @@ CREATED: [ID] - [Title]
 
 ### Completion
 
-When finished, output your completion promise using the promise tag shown in your identity section above.
+When finished, output your completion promise with XML-style tags.
+Your specific promise text is shown at the end of this prompt.
+The detector looks for the promise text wrapped in angle-bracket tags.
 `
 
 // HandoffProtocol provides instructions for passing context between agents.

@@ -145,13 +145,14 @@ make install            # Install both to ~/bin
 When iterating on forge/foundry code, use this command to build and install:
 
 ```bash
-go install ./cmd/forge/ ./cmd/foundry/ && \cp -f ~/go/bin/forge ~/go/bin/foundry ~/bin/
+go install ./cmd/forge/ ./cmd/foundry/ && rm -f ~/bin/forge ~/bin/foundry && cp ~/go/bin/forge ~/go/bin/foundry ~/bin/
 ```
 
 This ensures:
 1. Both binaries are compiled with latest changes
-2. Copies to `~/bin/` which is first in PATH
-3. No stale local binaries shadow the installed versions
+2. Removes old binaries first (avoids stale file handle issues)
+3. Copies to `~/bin/` which is first in PATH
+4. No stale local binaries shadow the installed versions
 
 **Verify installation:**
 ```bash
@@ -232,8 +233,42 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 | `worker` | Development tasks | No |
 | `planner` | Planning, task breakdown | No |
 | `reviewer` | Code review | No |
+| `groomer` | Backlog research and detailing | No |
+| `monitor` | Infrastructure health monitoring | No |
+| `tester` | UI/API testing with browser automation | No |
 | `merge` | PR merge coordination | Yes (locked) |
 | `deploy` | Deployment | Yes (locked) |
+
+### Leader Prompts
+
+Each leader role can have a customizable prompt file in `.forge/prompts/`:
+
+```
+.forge/prompts/
+├── planner.md      # Planning and prioritization instructions
+├── reviewer.md     # Code review checklist and process
+├── groomer.md      # Backlog grooming guidelines
+├── merge.md        # Merge coordination process
+├── deploy.md       # Deployment procedures
+├── monitor.md      # Infrastructure monitoring checks
+└── tester.md       # UI/API testing procedures
+```
+
+**How it works:**
+- When a leader starts, it loads the custom prompt from `.forge/prompts/<role>.md`
+- If no custom file exists, the built-in default prompt is used
+- Dynamic board state (tasks in review, backlog items, etc.) is appended automatically
+- Prompts can include Graphiti memory queries, CLI commands, and completion criteria
+
+**Creating custom prompts:**
+```bash
+# Prompts are initialized when running foundry init or manually created
+mkdir -p .forge/prompts
+# Edit the prompt for a specific role
+vim .forge/prompts/reviewer.md
+```
+
+Custom prompts allow workspace-specific context (project conventions, tech stack, review checklists) to be injected into leader sessions.
 
 ### Supervisor Pattern
 
@@ -273,6 +308,7 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 - `~/.forge/sessions/*.state.md` - Forge session state
 - `~/.forge/workers/registry.yaml` - Worker registry
 - `.forge/worktrees/` - Task-specific worktrees (supervisor creates these)
+- `.forge/prompts/` - Customizable leader prompt files (editable markdown)
 - `~/.forge/workers/locks/*.lock` - Resource locks (merge/deploy)
 - `.beads/` - Issue database (used by kanban view)
 - `.foundry/workspace.yaml` - Workspace config

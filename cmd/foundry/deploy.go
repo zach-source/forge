@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/zach-source/forge/internal/leader"
-	"github.com/zach-source/forge/internal/notion"
 )
 
 func newDeployCmd() *cobra.Command {
@@ -24,17 +23,16 @@ func newDeployCmd() *cobra.Command {
 The Deployment Leader is responsible for:
 - Deploying latest features to target environment
 - Running smoke tests to verify deployment
-- Creating Notion issues for failures and fixes
+- Creating tasks for failures and fixes (via foundry task add)
 - Managing rollbacks if needed
-- Updating beads and Notion status
 
 This is a single-threaded operation - only one deployment
 should be in progress per environment at a time.
 
 Examples:
-  forge deploy                     # Deploy to staging
-  forge deploy --env production    # Deploy to production
-  forge deploy --dry-run           # Show what would be deployed`,
+  foundry deploy                     # Deploy to staging
+  foundry deploy --env production    # Deploy to production
+  foundry deploy --dry-run           # Show what would be deployed`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := leader.GetWorkDir()
 			if err != nil {
@@ -48,12 +46,7 @@ Examples:
 			cfg.Environment = environment
 			cfg.DryRun = dryRun
 
-			notionCfg, err := notion.Load()
-			if err != nil {
-				return err
-			}
-
-			prompt := leader.DeployPrompt(notionCfg.DatabaseID, workDir, environment, dryRun)
+			prompt := leader.DeployPrompt("beads", workDir, environment, dryRun)
 			return leader.Run(context.Background(), cfg, prompt, leader.DeployPromise())
 		},
 	}
