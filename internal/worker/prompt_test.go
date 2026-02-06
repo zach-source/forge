@@ -46,6 +46,53 @@ func TestWorkerIdentityPrompt(t *testing.T) {
 	}
 }
 
+func TestWorkingGuidelines_IncrementalDevelopment(t *testing.T) {
+	w := &Worker{
+		Name: "alpha",
+		Role: RoleWorker,
+	}
+
+	guidelines := WorkingGuidelines(w)
+
+	expectedSubstrings := []string{
+		"### Incremental Development",
+		"draft PR",
+		"gh pr create --draft",
+		"gh pr ready",
+		"Regular commits",
+		"### Quality Standards",
+	}
+
+	for _, expected := range expectedSubstrings {
+		if !strings.Contains(guidelines, expected) {
+			t.Errorf("WorkingGuidelines() missing %q", expected)
+		}
+	}
+}
+
+func TestWorkingGuidelines_ContainsAllSections(t *testing.T) {
+	w := &Worker{
+		Name: "bravo",
+		Role: RoleWorker,
+	}
+
+	guidelines := WorkingGuidelines(w)
+
+	sections := []string{
+		"Available Tools",
+		"Incremental Development",
+		"Quality Standards",
+		"If Blocked",
+		"Before Completing",
+	}
+
+	for _, section := range sections {
+		if !strings.Contains(guidelines, section) {
+			t.Errorf("WorkingGuidelines() missing section %q", section)
+		}
+	}
+}
+
 func TestWorkerPromise(t *testing.T) {
 	tests := []struct {
 		name string

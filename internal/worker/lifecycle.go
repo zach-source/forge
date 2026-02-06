@@ -19,6 +19,8 @@ type StartOptions struct {
 	Promise       string
 	MCPConfig     string
 	MaxIterations int // 0 = use default (100), -1 = unlimited
+	AgentTeams    bool
+	TeammateMode  string
 }
 
 // Start starts a worker with the given options.
@@ -92,6 +94,10 @@ func Start(ctx context.Context, reg *Registry, workerID string, opts StartOption
 	if opts.MCPConfig != "" {
 		cfg.MCPConfigPath = opts.MCPConfig
 	}
+
+	// Pass agent teams config
+	cfg.AgentTeams = opts.AgentTeams
+	cfg.TeammateMode = opts.TeammateMode
 
 	// Set log file path
 	cfg.LogFile = logs.WorkerLogPath(w.Name)

@@ -50,6 +50,11 @@ func (d *Detector) IsComplete(output string) bool {
 
 // matches checks if the extracted text matches the promise.
 func (d *Detector) matches(text string) bool {
+	// Empty promise should never match
+	if d.promise == "" {
+		return false
+	}
+
 	// Exact match (case-insensitive)
 	if strings.EqualFold(text, d.promise) {
 		return true

@@ -9,7 +9,7 @@ This repository contains two complementary CLI tools:
 | Tool | Purpose | Scope |
 |------|---------|-------|
 | **Forge** | Claude session runner | Minimal - start/attach/monitor sessions |
-| **Foundry** | Orchestration platform | Full - supervisor, workers, kanban, leaders |
+| **Foundry** | Orchestration platform | Full - supervisor, workers, kanban, leaders, agent teams |
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -25,6 +25,7 @@ This repository contains two complementary CLI tools:
 │ charlie, ...  │      │ reviewer      │      │ issue tracker │
 │ (NATO names)  │      │ groomer       │      │               │
 │               │      │ merge, deploy │      │               │
+│               │      │ team-lead     │      │               │
 └───────┬───────┘      └───────┬───────┘      └───────────────┘
         │                      │
         └──────────┬───────────┘
@@ -118,6 +119,9 @@ foundry supervisor --leaders
 # Full autonomous workflow
 foundry supervisor --interval 1m --leaders --max-workers 4
 
+# Agent teams mode: unified team lead replaces knowledge-work leaders
+foundry supervisor --leaders --agent-teams
+
 # Task analysis and automatic requeue of stuck tasks
 foundry supervisor --auto-requeue --stuck 30m
 
@@ -171,7 +175,7 @@ foundry worker log alpha -n 50      # View output
 foundry worker reassign alpha bravo # Transfer task
 ```
 
-Worker roles: `worker`, `planner`, `reviewer`, `groomer`, `merge`, `deploy`
+Worker roles: `worker`, `planner`, `reviewer`, `groomer`, `monitor`, `tester`, `pm`, `cicd`, `merge`, `deploy`, `team-lead`
 
 ### External Board Sync
 
@@ -188,6 +192,34 @@ export GITHUB_TOKEN=ghp_xxx
 foundry board --github --config
 foundry board --github --sync
 ```
+
+### Agent Teams (Interactive)
+
+Launch an interactive Claude session with Agent Teams enabled. You talk directly to a team lead who spawns teammates for parallel work:
+
+```bash
+# Start a new team session
+foundry team
+
+# Reattach to an existing session
+foundry team --attach
+
+# Custom teammate mode
+foundry team --teammate-mode tmux       # Teammates in tmux panes (default)
+foundry team --teammate-mode in-process # Teammates in-process
+foundry team --teammate-mode auto       # Let Claude decide
+
+# Additional MCP servers and custom session name
+foundry team --mcp "server1,server2" --name my-team
+```
+
+What to expect:
+- A tmux session starts with Claude in full interactive mode (agent teams enabled)
+- You direct the team lead to spawn teammates for grooming, reviewing, planning, etc.
+- Teammates run in parallel (in tmux panes by default)
+- Detach with `Ctrl+B d`, reattach with `foundry team --attach`
+- Session persists in the background when detached
+- The team lead can use `foundry kanban` to view and manage your project tasks
 
 ### Leader Agents
 
@@ -325,6 +357,7 @@ cmd/
     ├── supervisor.go   # Orchestration loop
     ├── kanban.go       # Local issues
     ├── worker.go       # Parallel workers
+    ├── team.go         # Agent teams (interactive)
     ├── board.go        # Board sync
     ├── monitor.go      # TUI dashboard
     ├── shutdown.go     # Stop all agents

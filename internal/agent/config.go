@@ -38,6 +38,11 @@ type Config struct {
 
 	// LogFile is an optional custom log file path
 	LogFile string
+
+	// AgentTeams enables CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+	AgentTeams bool
+	// TeammateMode controls teammate spawning: "in-process", "tmux", "auto"
+	TeammateMode string
 }
 
 // DefaultConfig returns a Config with sensible defaults.

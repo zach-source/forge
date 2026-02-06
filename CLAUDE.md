@@ -18,6 +18,7 @@ This repository contains two CLI tools:
 - Local kanban issue tracking (view on beads)
 - Workspace and worktree management
 - Leader agents (planner, reviewer, merge, deploy)
+- Agent teams for interactive multi-agent coordination (`foundry team`)
 - Resource locking for single-threaded operations
 
 ## Architecture
@@ -38,6 +39,7 @@ cmd/
     ├── supervisor.go    # Orchestration loop
     ├── kanban.go        # Local issue tracker
     ├── worker.go        # Parallel workers
+    ├── team.go          # Agent teams (interactive)
     ├── board.go         # Notion/GitHub sync
     ├── monitor.go       # TUI dashboard
     ├── shutdown.go      # Stop all agents
@@ -98,6 +100,11 @@ foundry supervisor                    # Default 2m interval, 4 workers
 foundry supervisor --interval 30s     # Faster polling
 foundry supervisor --max-workers 4    # Max concurrent workers (default 4)
 foundry supervisor --leaders          # Enable all leader agents
+foundry supervisor --leaders --agent-teams  # Unified team lead mode
+
+# Agent teams (interactive)
+foundry team                          # Start interactive team session
+foundry team --attach                 # Reattach to existing session
 
 # Local kanban
 foundry kanban                        # View board
@@ -236,6 +243,9 @@ worker.Reassign(reg, fromID, toID)       // Transfer work
 | `groomer` | Backlog research and detailing | No |
 | `monitor` | Infrastructure health monitoring | No |
 | `tester` | UI/API testing with browser automation | No |
+| `pm` | Project management, next task analysis | No |
+| `cicd` | CI/CD health monitoring and fix tasks | No |
+| `team-lead` | Agent teams coordinator | No |
 | `merge` | PR merge coordination | Yes (locked) |
 | `deploy` | Deployment | Yes (locked) |
 
@@ -251,7 +261,8 @@ Each leader role can have a customizable prompt file in `.forge/prompts/`:
 ├── merge.md        # Merge coordination process
 ├── deploy.md       # Deployment procedures
 ├── monitor.md      # Infrastructure monitoring checks
-└── tester.md       # UI/API testing procedures
+├── tester.md       # UI/API testing procedures
+└── team-lead.md    # Agent teams coordinator instructions
 ```
 
 **How it works:**
@@ -292,6 +303,7 @@ Custom prompts allow workspace-specific context (project conventions, tech stack
 // --stuck 30m          Threshold for stuck tasks (default 30m)
 // --auto-requeue       Automatically requeue stuck tasks
 // --leaders            Enable all leader agents
+// --agent-teams        Use unified team lead for knowledge-work leaders
 // --no-auto-assign     Only monitor, don't assign tasks
 // --cleanup-orphans    Clean up orphaned tmux sessions on startup
 // --dry-run            Preview cleanup without taking action

@@ -56,9 +56,7 @@ func IsForgeSession(name string) bool {
 }
 
 // SessionIDFromName extracts the session ID from a tmux session name.
+// It strips the "forge-" prefix if present.
 func SessionIDFromName(name string) string {
-	if strings.HasPrefix(name, "forge-") {
-		return name
-	}
-	return name
+	return strings.TrimPrefix(name, "forge-")
 }

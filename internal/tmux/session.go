@@ -125,9 +125,28 @@ func (s *Session) RunCommand(command string) error {
 	return s.SendKeys(command)
 }
 
+// RunClaudeOptions configures how Claude is launched in a tmux session.
+type RunClaudeOptions struct {
+	Prompt          string
+	MCPConfig       string
+	SkipPermissions bool
+	AgentTeams      bool
+	TeammateMode    string // "tmux", "in-process", "auto"
+}
+
 // RunClaude runs Claude in interactive mode in the tmux session.
 // Uses a temp file and stdin redirect to pass the prompt reliably.
 func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) error {
+	return s.RunClaudeWithOptions(RunClaudeOptions{
+		Prompt:          prompt,
+		MCPConfig:       mcpConfig,
+		SkipPermissions: skipPermissions,
+	})
+}
+
+// RunClaudeWithOptions runs Claude with extended options (agent teams, etc).
+// Uses a temp file and stdin redirect to pass the prompt reliably (unattended Ralph loop mode).
+func (s *Session) RunClaudeWithOptions(opts RunClaudeOptions) error {
 	if !s.Exists() {
 		return ErrSessionNotFound
 	}
@@ -139,7 +158,7 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 	}
 	promptPath := promptFile.Name()
 
-	if _, err := promptFile.WriteString(prompt); err != nil {
+	if _, err := promptFile.WriteString(opts.Prompt); err != nil {
 		_ = promptFile.Close()
 		_ = os.Remove(promptPath)
 		return fmt.Errorf("writing prompt file: %w", err)
@@ -148,13 +167,22 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 
 	// Build claude command (interactive mode, no -p flag)
 	var cmdParts []string
+
+	// Prepend agent teams env var if enabled
+	if opts.AgentTeams {
+		cmdParts = append(cmdParts, "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
+	}
+
 	cmdParts = append(cmdParts, "claude")
 
-	if skipPermissions {
+	if opts.SkipPermissions {
 		cmdParts = append(cmdParts, "--dangerously-skip-permissions")
 	}
-	if mcpConfig != "" {
-		cmdParts = append(cmdParts, "--mcp-config", shellQuote(mcpConfig))
+	if opts.MCPConfig != "" {
+		cmdParts = append(cmdParts, "--mcp-config", shellQuote(opts.MCPConfig))
+	}
+	if opts.TeammateMode != "" {
+		cmdParts = append(cmdParts, "--teammate-mode", opts.TeammateMode)
 	}
 	cmdParts = append(cmdParts, "--allowedTools", "'*'")
 
@@ -162,6 +190,65 @@ func (s *Session) RunClaude(prompt, mcpConfig string, skipPermissions bool) erro
 	// Format: cat file | claude flags; rm file
 	cmd := fmt.Sprintf("cat %s | %s; rm -f %s", promptPath, strings.Join(cmdParts, " "), promptPath)
 
+	return s.SendKeys(cmd)
+}
+
+// ClaudeTeamOptions configures an interactive Claude session with agent teams.
+type ClaudeTeamOptions struct {
+	MCPConfig    string
+	TeammateMode string // "tmux" (default for foundry), "in-process", "auto"
+	SystemPrompt string // appended to Claude's system prompt via --append-system-prompt
+}
+
+// RunClaudeInteractive starts Claude in full interactive mode (no stdin pipe).
+// Used for foundry team sessions where the user interacts directly with Claude.
+func (s *Session) RunClaudeInteractive(opts ClaudeTeamOptions) error {
+	if !s.Exists() {
+		return ErrSessionNotFound
+	}
+
+	// If system prompt provided, write to temp file for reliable delivery
+	var promptPath string
+	if opts.SystemPrompt != "" {
+		f, err := os.CreateTemp("", "forge-team-prompt-*.txt")
+		if err != nil {
+			return fmt.Errorf("creating prompt file: %w", err)
+		}
+		if _, err := f.WriteString(opts.SystemPrompt); err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+			return fmt.Errorf("writing prompt file: %w", err)
+		}
+		_ = f.Close()
+		promptPath = f.Name()
+	}
+
+	// Build claude command for interactive use
+	var cmdParts []string
+
+	// Agent teams env var
+	cmdParts = append(cmdParts, "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
+	cmdParts = append(cmdParts, "claude")
+
+	if opts.MCPConfig != "" {
+		cmdParts = append(cmdParts, "--mcp-config", shellQuote(opts.MCPConfig))
+	}
+	if opts.TeammateMode != "" {
+		cmdParts = append(cmdParts, "--teammate-mode", opts.TeammateMode)
+	}
+	if promptPath != "" {
+		cmdParts = append(cmdParts, "--append-system-prompt", fmt.Sprintf("\"$(cat %s)\"", promptPath))
+	}
+	cmdParts = append(cmdParts, "--allowedTools", "'*'")
+
+	// Build final command - clean up prompt file after Claude reads it
+	cmd := strings.Join(cmdParts, " ")
+	if promptPath != "" {
+		cmd += fmt.Sprintf("; rm -f %s", promptPath)
+	}
+
+	// NO stdin pipe - Claude starts in full interactive mode
+	// NO --dangerously-skip-permissions - user is present to approve
 	return s.SendKeys(cmd)
 }
 

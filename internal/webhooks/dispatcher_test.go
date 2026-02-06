@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,11 +38,16 @@ func TestNewDispatcher(t *testing.T) {
 
 func TestDispatcherDispatch(t *testing.T) {
 	var received atomic.Int32
+	var mu sync.Mutex
 	var lastPayload Payload
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p Payload
+		json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		lastPayload = p
+		mu.Unlock()
 		received.Add(1)
-		json.NewDecoder(r.Body).Decode(&lastPayload)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -67,8 +73,11 @@ func TestDispatcherDispatch(t *testing.T) {
 	if received.Load() != 1 {
 		t.Errorf("expected 1 request, got %d", received.Load())
 	}
-	if lastPayload.Event != EventTaskCompleted {
-		t.Errorf("expected event type %s, got %s", EventTaskCompleted, lastPayload.Event)
+	mu.Lock()
+	eventType := lastPayload.Event
+	mu.Unlock()
+	if eventType != EventTaskCompleted {
+		t.Errorf("expected event type %s, got %s", EventTaskCompleted, eventType)
 	}
 }
 

@@ -24,6 +24,7 @@ const (
 	RoleTester     Role = "tester"
 	RolePM         Role = "pm"
 	RoleCICD       Role = "cicd"
+	RoleTeamLead   Role = "team-lead"
 )
 
 // Config holds configuration for a leader session.
@@ -115,6 +116,7 @@ func printBanner(role Role) {
 		RoleMonitor:    "📡",
 		RoleTester:     "🧪",
 		RolePM:         "📊",
+		RoleTeamLead:   "🎯",
 	}
 
 	names := map[Role]string{
@@ -126,6 +128,7 @@ func printBanner(role Role) {
 		RoleMonitor:    "Monitor",
 		RoleTester:     "Tester",
 		RolePM:         "Project Manager",
+		RoleTeamLead:   "Team Lead",
 	}
 
 	icon := icons[role]
