@@ -197,6 +197,7 @@ func (s *Session) RunClaudeWithOptions(opts RunClaudeOptions) error {
 type ClaudeTeamOptions struct {
 	MCPConfig    string
 	TeammateMode string // "tmux" (default for foundry), "in-process", "auto"
+	SystemPrompt string // appended to Claude's system prompt via --append-system-prompt
 }
 
 // RunClaudeInteractive starts Claude in full interactive mode (no stdin pipe).
@@ -204,6 +205,22 @@ type ClaudeTeamOptions struct {
 func (s *Session) RunClaudeInteractive(opts ClaudeTeamOptions) error {
 	if !s.Exists() {
 		return ErrSessionNotFound
+	}
+
+	// If system prompt provided, write to temp file for reliable delivery
+	var promptPath string
+	if opts.SystemPrompt != "" {
+		f, err := os.CreateTemp("", "forge-team-prompt-*.txt")
+		if err != nil {
+			return fmt.Errorf("creating prompt file: %w", err)
+		}
+		if _, err := f.WriteString(opts.SystemPrompt); err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+			return fmt.Errorf("writing prompt file: %w", err)
+		}
+		_ = f.Close()
+		promptPath = f.Name()
 	}
 
 	// Build claude command for interactive use
@@ -219,11 +236,20 @@ func (s *Session) RunClaudeInteractive(opts ClaudeTeamOptions) error {
 	if opts.TeammateMode != "" {
 		cmdParts = append(cmdParts, "--teammate-mode", opts.TeammateMode)
 	}
+	if promptPath != "" {
+		cmdParts = append(cmdParts, "--append-system-prompt", fmt.Sprintf("\"$(cat %s)\"", promptPath))
+	}
 	cmdParts = append(cmdParts, "--allowedTools", "'*'")
+
+	// Build final command - clean up prompt file after Claude reads it
+	cmd := strings.Join(cmdParts, " ")
+	if promptPath != "" {
+		cmd += fmt.Sprintf("; rm -f %s", promptPath)
+	}
 
 	// NO stdin pipe - Claude starts in full interactive mode
 	// NO --dangerously-skip-permissions - user is present to approve
-	return s.SendKeys(strings.Join(cmdParts, " "))
+	return s.SendKeys(cmd)
 }
 
 // CapturePane captures the current pane content.
