@@ -50,6 +50,7 @@ func newSupervisorCmd() *cobra.Command {
 		memThreshold         float64
 		failureThreshold     float64
 		noThrottle           bool
+		useAgentTeams        bool
 	)
 
 	cmd := &cobra.Command{
@@ -118,6 +119,7 @@ Examples:
 				dashboardMode:        dashboardMode,
 				healthThresholds:     thresholds,
 				noThrottle:           noThrottle,
+				useAgentTeams:        useAgentTeams,
 			})
 		},
 	}
@@ -144,6 +146,7 @@ Examples:
 	cmd.Flags().Float64Var(&memThreshold, "mem-threshold", 80.0, "Degrade assignment above this memory%")
 	cmd.Flags().Float64Var(&failureThreshold, "failure-threshold", 0.5, "Pause assignment when failure rate exceeds this (0.0-1.0)")
 	cmd.Flags().BoolVar(&noThrottle, "no-throttle", false, "Disable health-based throttling")
+	cmd.Flags().BoolVar(&useAgentTeams, "agent-teams", false, "Use agent teams for knowledge-work leaders (experimental)")
 
 	return cmd
 }
@@ -169,6 +172,7 @@ type supervisorConfig struct {
 	webhookDispatcher    *webhooks.Dispatcher
 	healthThresholds     health.ThresholdConfig
 	noThrottle           bool
+	useAgentTeams        bool
 }
 
 type leaderState struct {
@@ -178,7 +182,7 @@ type leaderState struct {
 }
 
 // allLeaderRoles lists all available leader roles.
-var allLeaderRoles = []string{"planner", "reviewer", "merge", "deploy", "groomer", "monitor", "tester", "pm", "cicd"}
+var allLeaderRoles = []string{"planner", "reviewer", "merge", "deploy", "groomer", "monitor", "tester", "pm", "cicd", "team-lead"}
 
 // parseLeaderFlags parses --enable-leaders and --disable-leaders flags.
 // Returns a map of enabled leader roles.
@@ -254,6 +258,7 @@ type supervisorState struct {
 	tester   leaderState // for UI/API testing
 	pm       leaderState // for project management
 	cicd     leaderState // for CI/CD monitoring and fixes
+	teamLead leaderState // for agent teams team-lead
 
 	// Leader scheduling
 	leaderLastRun       map[string]time.Time // role -> last run start time
@@ -348,6 +353,14 @@ var leaderTriggers = []LeaderTrigger{
 			return !state.cicd.running
 		},
 		Cooldown: 15 * time.Minute,
+	},
+	{
+		Role: "team-lead",
+		Condition: func(counts map[kanban.Status]int, state *supervisorState, workerActive bool) bool {
+			hasWork := counts[kanban.StatusBacklog] > 0 || counts[kanban.StatusReview] > 0 || counts[kanban.StatusDone] >= 3
+			return hasWork && !state.teamLead.running
+		},
+		Cooldown: 10 * time.Minute,
 	},
 }
 
@@ -540,6 +553,10 @@ func getLeaderStateByRole(state *supervisorState, role string) *leaderState {
 		return &state.pm
 	case "analyzer":
 		return &state.analyzer
+	case "cicd":
+		return &state.cicd
+	case "team-lead":
+		return &state.teamLead
 	default:
 		return nil
 	}
@@ -590,6 +607,8 @@ func buildPersistentState(state *supervisorState, startedAt time.Time, cycleCoun
 		{"tester", &state.tester},
 		{"pm", &state.pm},
 		{"analyzer", &state.analyzer},
+		{"cicd", &state.cicd},
+		{"team-lead", &state.teamLead},
 	}
 
 	for _, l := range leaders {
@@ -909,6 +928,11 @@ func syncLeaderStateFromRegistry(reg *worker.Registry, state *supervisorState) {
 			state.groomer.sessionID = w.SessionID
 			state.groomer.startedAt = w.LastActive
 			fmt.Printf("🧹 Restored groomer state from %s\n", w.DisplayName())
+		case worker.RoleTeamLead:
+			state.teamLead.running = true
+			state.teamLead.sessionID = w.SessionID
+			state.teamLead.startedAt = w.LastActive
+			fmt.Printf("🎯 Restored team-lead state from %s\n", w.DisplayName())
 		}
 	}
 }
@@ -1517,6 +1541,7 @@ func checkLeaderSessions(reg *worker.Registry, state *supervisorState) {
 	checkLeader(worker.RoleTester, &state.tester, "Tester", "tester")
 	checkLeader(worker.RolePM, &state.pm, "Project Manager", "pm")
 	checkLeader(worker.RoleCICD, &state.cicd, "CI/CD Leader", "cicd")
+	checkLeader(worker.RoleTeamLead, &state.teamLead, "Team Lead", "team-lead")
 
 	// Analyzer uses planner role but different state
 	if state.analyzer.running {
@@ -1975,25 +2000,45 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	}
 
 	// Use smart leader scheduling with triggers and cooldowns
-	// 1. GROOMER: Run when there are items in backlog
-	if shouldStartLeader("groomer", counts, state, cfg, workerActive) {
-		recordLeaderStart(state, "groomer")
-		startGroomer(store, reg, state, workDir, board, cfg)
+
+	if cfg.useAgentTeams {
+		// Agent teams mode: knowledge-work leaders (groomer, reviewer, planner, pm) are
+		// replaced by a unified team-lead that coordinates via Claude Agent Teams.
+		// Infrastructure leaders (monitor, tester, cicd) and single-threaded (merge, deploy)
+		// still run independently.
+		if shouldStartLeader("team-lead", counts, state, cfg, workerActive) {
+			recordLeaderStart(state, "team-lead")
+			startLeaderTeam(store, reg, state, workDir, board, cfg)
+		}
+	} else {
+		// Standard mode: individual leaders
+		// 1. GROOMER: Run when there are items in backlog
+		if shouldStartLeader("groomer", counts, state, cfg, workerActive) {
+			recordLeaderStart(state, "groomer")
+			startGroomer(store, reg, state, workDir, board, cfg)
+		}
+
+		// 2. REVIEWER: Run when there are tasks in review
+		if shouldStartLeader("reviewer", counts, state, cfg, workerActive) {
+			recordLeaderStart(state, "reviewer")
+			startReviewer(store, reg, state, workDir, board, cfg)
+		}
+
+		// 3. PLANNER: Run when no work in progress and we need to plan
+		if shouldStartLeader("planner", counts, state, cfg, workerActive) {
+			recordLeaderStart(state, "planner")
+			startPlanner(store, reg, state, workDir, board, cfg)
+			return // Planner blocks other leaders
+		}
+
+		// 7. PM: Run when there are done tasks to analyze
+		if shouldStartLeader("pm", counts, state, cfg, workerActive) {
+			recordLeaderStart(state, "pm")
+			startPM(store, reg, state, workDir, board, cfg)
+		}
 	}
 
-	// 2. REVIEWER: Run when there are tasks in review
-	if shouldStartLeader("reviewer", counts, state, cfg, workerActive) {
-		recordLeaderStart(state, "reviewer")
-		startReviewer(store, reg, state, workDir, board, cfg)
-	}
-
-	// 3. PLANNER: Run when no work in progress and we need to plan
-	if shouldStartLeader("planner", counts, state, cfg, workerActive) {
-		recordLeaderStart(state, "planner")
-		startPlanner(store, reg, state, workDir, board, cfg)
-		return // Planner blocks other leaders
-	}
-
+	// These leaders run in both modes (not replaced by team-lead)
 	// 4. DEPLOY: Run when there are tasks in merge queue
 	if shouldStartLeader("deploy", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "deploy")
@@ -2010,12 +2055,6 @@ func runLeaderWorkflow(store *kanban.Store, reg *worker.Registry, state *supervi
 	if shouldStartLeader("tester", counts, state, cfg, workerActive) {
 		recordLeaderStart(state, "tester")
 		startTester(reg, state, workDir, cfg)
-	}
-
-	// 7. PM: Run when there are done tasks to analyze
-	if shouldStartLeader("pm", counts, state, cfg, workerActive) {
-		recordLeaderStart(state, "pm")
-		startPM(store, reg, state, workDir, board, cfg)
 	}
 
 	// 8. CICD: Run periodically to check CI health
@@ -2355,6 +2394,115 @@ func startCICD(reg *worker.Registry, state *supervisorState, workDir string, cfg
 	}
 
 	startLeader(reg, w, &state.cicd, workDir, prompt, leader.PromiseCICD, cfg.webhookDispatcher)
+}
+
+func startLeaderTeam(store *kanban.Store, reg *worker.Registry, state *supervisorState, workDir string, board *kanban.Board, cfg supervisorConfig) {
+	w := findIdleLeader(reg, worker.RoleTeamLead)
+	if w == nil {
+		fmt.Printf("⚠️  Agent teams mode enabled but no idle team-lead worker\n")
+		fmt.Printf("   Create one with: foundry worker create --role team-lead\n")
+		return
+	}
+
+	fmt.Printf("🎯 Starting team lead %s (agent teams mode)\n", w.DisplayName())
+
+	// Try to load custom prompt from .forge/prompts/team-lead.md
+	loader := leader.NewPromptLoader(workDir)
+	prompt, err := loader.Load("team-lead")
+	if err != nil {
+		fmt.Printf("⚠️  Error loading team-lead prompt: %v\n", err)
+	}
+
+	// If custom prompt found, append board state; otherwise build full prompt
+	if prompt != "" {
+		prompt += "\n\n" + buildTeamLeadBoardState(board, workDir)
+	} else {
+		prompt = buildTeamLeadPrompt(board, workDir)
+	}
+
+	// Start leader with agent teams enabled
+	startLeaderWithAgentTeams(reg, w, &state.teamLead, workDir, prompt, leader.PromiseLeaderTeam, cfg.webhookDispatcher)
+}
+
+// startLeaderWithAgentTeams starts a leader with agent teams enabled.
+func startLeaderWithAgentTeams(reg *worker.Registry, w *worker.Worker, ls *leaderState, workDir, prompt, promise string, dispatcher *webhooks.Dispatcher) {
+	ls.running = true
+	ls.sessionID = w.TmuxSessionName()
+	ls.startedAt = time.Now()
+
+	// Determine worktree
+	leaderWorkDir := workDir
+	gitRepo, err := findGitRepo(workDir)
+	if err == nil {
+		leaderWorkDir = gitRepo
+	}
+
+	// Team lead uses a dedicated worktree
+	if wt, err := createLeaderWorktree(workDir, "team-lead"); err == nil {
+		leaderWorkDir = wt
+		fmt.Printf("   📁 Using worktree: %s\n", wt)
+	}
+
+	// Dispatch webhook
+	if dispatcher != nil {
+		event := webhooks.NewLeaderLaunchedEvent(string(w.Role), w.ID, w.DisplayName(), ls.sessionID)
+		dispatcher.Dispatch(context.Background(), event)
+	}
+
+	go func() {
+		opts := worker.StartOptions{
+			TaskID:       "team-lead-session",
+			Worktree:     leaderWorkDir,
+			Prompt:       prompt,
+			Promise:      promise,
+			AgentTeams:   true,
+			TeammateMode: "tmux",
+		}
+		opts.MaxIterations = 500 // High limit for team coordination
+
+		ctx := context.Background()
+		if err := worker.Start(ctx, reg, w.ID, opts); err != nil {
+			fmt.Printf("⚠️  Error starting team lead: %v\n", err)
+			ls.running = false
+		}
+	}()
+}
+
+func buildTeamLeadBoardState(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+	sb.WriteString("## Board State\n\n")
+	for _, col := range board.Columns {
+		sb.WriteString(fmt.Sprintf("### %s (%d)\n", col.Status, len(col.Issues)))
+		for _, issue := range col.Issues {
+			sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", issue.Priority, issue.ID, issue.Title))
+			if issue.Description != "" {
+				sb.WriteString(fmt.Sprintf("  %s\n", issue.Description))
+			}
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("Working directory: %s\n", workDir))
+	sb.WriteString(fmt.Sprintf("\nWhen ALL teammates have completed, output:\n```\n<promise>%s</promise>\n```\n", leader.PromiseLeaderTeam))
+	return sb.String()
+}
+
+func buildTeamLeadPrompt(board *kanban.Board, workDir string) string {
+	var sb strings.Builder
+
+	sb.WriteString("# Leader Team Coordinator\n\n")
+	sb.WriteString("You coordinate a team of specialized agents using Claude Code Agent Teams.\n\n")
+	sb.WriteString("## Your Role\n\n")
+	sb.WriteString("Assess the board state and spawn teammates as needed:\n")
+	sb.WriteString("- **Groomer**: Research and detail backlog items\n")
+	sb.WriteString("- **Reviewer**: Review tasks in the review queue\n")
+	sb.WriteString("- **Planner**: Plan and prioritize when backlog needs work\n")
+	sb.WriteString("- **PM**: Analyze done tasks for patterns and improvements\n\n")
+	sb.WriteString("Give each teammate specific instructions and the relevant work queue.\n")
+	sb.WriteString("Monitor progress and report results when all finish.\n\n")
+
+	sb.WriteString(buildTeamLeadBoardState(board, workDir))
+
+	return sb.String()
 }
 
 // Prompt builders for each leader role

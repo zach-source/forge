@@ -138,7 +138,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	fmt.Printf("   Promise: %q\n", a.config.CompletionPromise)
 	fmt.Printf("   Max iterations: %d\n\n", a.config.MaxIterations)
 
-	// 5. Run the iteration loop
+	// 5. If agent teams mode, run a single long session instead of Ralph loop
+	if a.config.AgentTeams {
+		return a.runTeamSession(ctx, state)
+	}
+
+	// 6. Run the iteration loop
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,6 +207,53 @@ func (a *Agent) Run(ctx context.Context) error {
 		// Small delay before next iteration
 		time.Sleep(1 * time.Second)
 	}
+}
+
+// runTeamSession runs Claude once with agent teams enabled and waits for completion.
+// This bypasses the Ralph iteration loop since the team lead manages its own work.
+func (a *Agent) runTeamSession(ctx context.Context, state *ralph.State) error {
+	fmt.Printf("🎯 Running agent teams session (bypassing Ralph loop)\n")
+
+	// Use a long timeout for team sessions (4 hours)
+	teamTimeout := 4 * time.Hour
+	if a.config.Timeout > teamTimeout {
+		teamTimeout = a.config.Timeout
+	}
+
+	// Run Claude with agent teams via RunClaudeWithOptions
+	if err := a.session.RunClaudeWithOptions(tmux.RunClaudeOptions{
+		Prompt:          state.Prompt,
+		MCPConfig:       a.mcpPath,
+		SkipPermissions: a.config.SkipPermissions,
+		AgentTeams:      true,
+		TeammateMode:    a.config.TeammateMode,
+	}); err != nil {
+		return fmt.Errorf("running Claude with agent teams: %w", err)
+	}
+
+	// Wait for Claude to exit with extended timeout
+	output, err := a.session.WaitForClaudeExit(teamTimeout)
+	if err != nil {
+		fmt.Printf("Warning: error waiting for team session: %v\n", err)
+	}
+
+	// Check for completion promise
+	result := a.detector.Check(output)
+	if result.Complete {
+		return a.handleComplete(state, result.Promises)
+	}
+
+	// Session ended without promise
+	if output != "" {
+		fmt.Printf("Warning: team session ended without completion promise\n")
+	}
+
+	state.Active = false
+	if err := a.state.Write(state); err != nil {
+		fmt.Printf("Warning: failed to update state: %v\n", err)
+	}
+
+	return fmt.Errorf("team session ended without completion")
 }
 
 // buildPrompt builds the prompt for an iteration.

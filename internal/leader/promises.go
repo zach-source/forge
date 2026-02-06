@@ -31,6 +31,9 @@ const (
 
 	// CI/CD Leader promises
 	PromiseCICD = "CICD_HEALTHY"
+
+	// Team Lead promises (agent teams coordinator)
+	PromiseLeaderTeam = "LEADER_TEAM_COMPLETE"
 )
 
 // WorkerPromiseFormat is the format string for worker promises.

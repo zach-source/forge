@@ -24,6 +24,11 @@ foundry supervisor --analyze-interval 10m  # Task analysis interval
 foundry supervisor --stuck 30m        # Stuck task threshold
 ```
 
+```bash
+# Agent teams mode: unified team lead replaces knowledge-work leaders
+foundry supervisor --leaders --agent-teams
+```
+
 Workflow: `backlog` → (groomer) → `todo` → `in_progress` → `review` → `done` → merge → deploy
 
 Features:
@@ -34,6 +39,34 @@ Features:
 - Pokes active workers periodically
 - Analyzes stuck tasks and requeues them (--auto-requeue)
 - Launches leaders based on workflow state
+
+### Agent Teams (Interactive)
+
+Launch an interactive Claude session with Agent Teams enabled. You direct a team lead who spawns teammates for parallel work:
+
+```bash
+foundry team                          # Start new team session
+foundry team --attach                 # Reattach to existing session
+foundry team --teammate-mode tmux     # Teammates in tmux panes (default)
+foundry team --teammate-mode in-process  # Teammates in-process
+foundry team --teammate-mode auto     # Let Claude decide
+foundry team --mcp "server1,server2"  # Additional MCP servers
+foundry team --name my-team           # Custom session name
+```
+
+What to expect:
+- A tmux session starts with Claude in full interactive mode (agent teams enabled)
+- You direct the team lead to spawn teammates for grooming, reviewing, planning, etc.
+- Teammates run in parallel (in tmux panes by default)
+- Detach with `Ctrl+B d`, reattach with `foundry team --attach`
+- Session persists in the background when detached
+- The team lead can use `foundry kanban` to view and manage tasks
+
+Flags:
+- `--attach, -a`: Reattach to an existing team session
+- `--teammate-mode`: How teammates are spawned (tmux, in-process, auto)
+- `--mcp`: Comma-separated list of additional MCP servers
+- `--name`: Custom tmux session name (auto-generated if omitted)
 
 ### Kanban (View on Beads)
 
@@ -229,6 +262,11 @@ func runCycle(cfg supervisorConfig, state *supervisorState) {
 | `planner` | Planning and architecture | No |
 | `reviewer` | Code review | No |
 | `groomer` | Backlog research and detailing | No |
+| `monitor` | Infrastructure health monitoring | No |
+| `tester` | UI/API testing with browser automation | No |
+| `pm` | Project management, next task analysis | No |
+| `cicd` | CI/CD health monitoring and fix tasks | No |
+| `team-lead` | Agent teams coordinator | No |
 | `merge` | Merge coordination | Yes (locked) |
 | `deploy` | Deployment management | Yes (locked) |
 
@@ -260,6 +298,7 @@ create → idle → start → active → stop → stopped
 | `internal/board` | Board provider interface |
 | `internal/workspace` | Workspace operations |
 | `internal/monitor` | TUI dashboard |
+| `internal/agentteams` | Agent teams integration tests |
 
 ## Code Style
 

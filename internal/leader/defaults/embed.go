@@ -18,5 +18,6 @@ func AllRoles() []string {
 		"tester",
 		"pm",
 		"cicd",
+		"team-lead",
 	}
 }

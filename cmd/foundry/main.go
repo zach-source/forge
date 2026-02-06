@@ -49,6 +49,8 @@ Examples:
 		newMonitorCmd(),
 		newSupervisorCmd(),
 		newShutdownCmd(),
+		// Agent teams
+		newTeamCmd(),
 		// Leaders (launch forge sessions)
 		newPlannerCmd(),
 		newReviewerCmd(),
